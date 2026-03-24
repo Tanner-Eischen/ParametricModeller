@@ -1,0 +1,141 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --panel-bg: #1e1e1e;
+  --viewport-bg: #252526;
+  --status-bg: #007acc;
+  --text-primary: #cccccc;
+  --text-secondary: #858585;
+  --border-color: #3c3c3c;
+  --accent-color: #0e639c;
+  --highlight-color: #ffd700;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  font-size: 13px;
+  color: var(--text-primary);
+  background-color: var(--viewport-bg);
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+
+#panel-left {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 250px;
+  height: calc(100% - 24px);
+  background-color: var(--panel-bg);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+}
+
+.panel-header {
+  padding: 10px 12px;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.panel-content {
+  flex: 1;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.placeholder-text {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+#viewport {
+  flex: 1;
+  margin-left: 250px;
+  background-color: var(--viewport-bg);
+}
+
+#status-bar {
+  height: 24px;
+  background-color: var(--status-bg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  font-size: 12px;
+  color: white;
+}
+
+#status-left, #status-center, #status-right {
+  flex: 1;
+}
+
+#status-center {
+  text-align: center;
+}
+
+#status-right {
+  text-align: right;
+}
+
+/* Selection highlight */
+.selected {
+  outline: 2px solid var(--highlight-color);
+  outline-offset: -2px;
+}
+
+/* Context menu (future) */
+.context-menu {
+  position: absolute;
+  background-color: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 4px 0;
+  min-width: 150px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.context-menu-item {
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.context-menu-item:hover {
+  background-color: var(--accent-color);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--panel-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}

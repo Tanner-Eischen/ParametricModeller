@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Parametric Modeler</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="panel-left">
+        <div class="panel-header">Features</div>
+        <div class="panel-content">
+          <p class="placeholder-text">Feature tree will appear here</p>
+        </div>
+      </aside>
+      <main id="viewport"></main>
+      <footer id="status-bar">
+        <span id="status-left">Ready</span>
+        <span id="status-center"></span>
+        <span id="status-right">Units: Inches</span>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
