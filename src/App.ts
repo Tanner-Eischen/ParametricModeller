@@ -147,6 +147,8 @@ import {
   MOVE_COPY_FEATURE_TYPE,
   rebuildMoveCopy,
   createMoveCopyFeature,
+  BAKE_BODY_FEATURE_TYPE,
+  rebuildBakeBody,
   type MoveVertexParams,
   type RotateBodyParams,
   type MoveCopyParams,
@@ -587,6 +589,7 @@ export class App {
     this.rebuildEngine.registerHandler(TRANSFORM_BODIES_FEATURE_TYPE, rebuildTransformBodies);
     this.rebuildEngine.registerHandler(WOOD_JOINT_FEATURE_TYPE, rebuildWoodJoint);
     this.rebuildEngine.registerHandler(MOVE_COPY_FEATURE_TYPE, rebuildMoveCopy);
+    this.rebuildEngine.registerHandler(BAKE_BODY_FEATURE_TYPE, rebuildBakeBody);
     this.translationTriadGizmo.attach(
       this.viewport.getScene(),
       this.viewport.getCameraControls(),

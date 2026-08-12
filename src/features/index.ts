@@ -106,3 +106,6 @@ export * from './placement';
 
 // Guarded, history-based woodworking joints and manufacturing intent
 export * from './joints';
+
+// Independent baked-body snapshot (first-class body with no source dependency)
+export * from './bake';
