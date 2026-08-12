@@ -50,7 +50,6 @@ import {
   CommandPalette,
   ContextTaskPanel,
   WoodworkingPanel,
-  CollapsiblePanelSection,
   createDefaultWoodworkingMetadata,
   createEmptyFaceSketchFeature,
   getDefaultCutFlipForSketch,
@@ -194,6 +193,8 @@ import { MITER_CUT_FEATURE_TYPE } from './features/miter';
 import { LINEAR_PATTERN_FEATURE_TYPE, MIRROR_FEATURE_TYPE, DUPLICATE_FEATURE_TYPE, rebuildDuplicate } from './features/pattern';
 import { MOVE_VERTEX_FEATURE_TYPE } from './features/vertex';
 import { ROTATE_BODY_FEATURE_TYPE, JOIN_BODIES_FEATURE_TYPE } from './features/transform';
+import { PanelChrome } from './app/PanelChrome';
+import { GizmoManager } from './app/GizmoManager';
 import { BODY_BOOLEAN_FEATURE_TYPE, createBodyBooleanFeature } from './features/boolean';
 import { TRANSFORM_BODIES_FEATURE_TYPE } from './features/placement';
 import { WOOD_JOINT_FEATURE_TYPE } from './features/joints';
@@ -460,7 +461,13 @@ export class App {
   private commandPalette: CommandPalette;
   private contextTaskPanel: ContextTaskPanel;
   private woodworkingPanel: WoodworkingPanel;
-  private panelSections = new Map<string, CollapsiblePanelSection>();
+  private panelChrome = new PanelChrome({
+    store: this.workspacePreferencesStore,
+    getPreferences: () => this.workspacePreferences,
+    onPreferencesChanged: (prefs) => {
+      this.workspacePreferences = prefs;
+    },
+  });
   private propertiesExpandedForFeatureId: string | null = null;
   private browserContextTask: ContextTaskPanelState | null = null;
   private welcomeOverlay: WelcomeOverlay;
@@ -472,19 +479,14 @@ export class App {
   private vertexEditPrompt: VertexEditPrompt;
   private translationTriadGizmo = new TranslationTriadGizmo();
   /**
-   * Per-gizmo drag state. Orbit is suppressed when ANY entry is true, so that
-   * one gizmo ending a drag can never re-enable the camera while another is
-   * still mid-drag (the former source of the rotate-gizmo-steals-camera bug).
+   * Centralized gizmo drag-state and camera-navigation suppression. Orbit is
+   * suppressed whenever any gizmo is dragging (or a modal rotate session is
+   * open), so one gizmo ending a drag can never re-enable the camera while
+   * another is still mid-drag — the former rotate-gizmo-steals-camera bug.
    */
-  private gizmoDragState = {
-    pushPull: false,
-    bodyRotate: false,
-    moveVertex: false,
-    instance: false,
-    moveCopy: false,
-  };
-  /** Rotate is modal: the camera stays locked for the whole editor session. */
-  private bodyRotateSessionActive = false;
+  private gizmos = new GizmoManager({
+    getCameraControls: () => this.viewport.getCameraControls(),
+  });
 
   // Assembly state (Milestone 06)
   private components: Component[] = [];
@@ -593,7 +595,7 @@ export class App {
 
     // Initialize UI panels
     this.subObjectSelectionPanel = new SubObjectSelectionPanel(
-      this.createPanelContainer(this.layout.getPanelLeft(), 'Selection', {
+      this.panelChrome.createContainer(this.layout.getPanelLeft(), 'Selection', {
         description: 'Pick bodies, faces, edges, or vertices',
       }),
       {
@@ -603,7 +605,7 @@ export class App {
     );
 
     this.modelBrowser = new ModelBrowserPanel({
-      container: this.createPanelContainer(this.layout.getPanelLeft(), 'Model browser', {
+      container: this.panelChrome.createContainer(this.layout.getPanelLeft(), 'Model browser', {
         description: 'Objects, assemblies, and edit history',
       }),
       onSelect: (target) => this.selectModelBrowserTarget(target),
@@ -618,7 +620,7 @@ export class App {
       onShowDependencies: (request) => this.showFeatureDependencies(request),
     });
 
-    const contextTaskContainer = this.createPanelContainer(
+    const contextTaskContainer = this.panelChrome.createContainer(
       this.layout.getPanelRight(),
       'Active tool',
       { description: 'Controls for the active tool or current selection' },
@@ -633,21 +635,21 @@ export class App {
     this.featureTreePanel = new FeatureTreePanel({ container: legacyFeatureTreeContainer });
 
     this.propertyInspector = new PropertyInspector({
-      container: this.createPanelContainer(this.layout.getPanelRight(), 'Properties', {
+      container: this.panelChrome.createContainer(this.layout.getPanelRight(), 'Properties', {
         description: 'Parameters of the selected feature or body',
       }),
       units: this.documentManager.getDocument().config.units,
     });
 
     this.diagnosticsPanel = new DiagnosticsPanel({
-      container: this.createPanelContainer(this.layout.getPanelRight(), 'Diagnostics', {
+      container: this.panelChrome.createContainer(this.layout.getPanelRight(), 'Diagnostics', {
         description: 'Rebuild errors and warnings',
         hidden: true,
       }),
     });
 
     this.woodworkingPanel = new WoodworkingPanel({
-      container: this.createPanelContainer(this.layout.getPanelRight(), 'Woodworking', {
+      container: this.panelChrome.createContainer(this.layout.getPanelRight(), 'Woodworking', {
         description: 'Tag boards, export cut list & shop drawings',
         hidden: true,
       }),
@@ -726,7 +728,7 @@ export class App {
     });
 
     this.sketchSetupPanel = new SketchSetupPanel({
-      container: this.createPanelContainer(this.layout.getPanelRight(), 'Sketch', {
+      container: this.panelChrome.createContainer(this.layout.getPanelRight(), 'Sketch', {
         description: '2D sketch workspace',
         hidden: true,
       }),
@@ -755,7 +757,7 @@ export class App {
       onExitSketch: () => this.exitSketchMode(true),
     });
 
-    const recentFilesContainer = this.createPanelContainer(
+    const recentFilesContainer = this.panelChrome.createContainer(
       this.layout.getPanelRight(),
       'Recent files',
       { description: 'Reopen recent documents', hidden: true },
@@ -769,7 +771,7 @@ export class App {
 
     // Initialize assembly UI components (Milestone 06)
     this.assemblyPanel = new AssemblyPanel({
-      container: this.createPanelContainer(this.layout.getPanelRight(), 'Assembly', {
+      container: this.panelChrome.createContainer(this.layout.getPanelRight(), 'Assembly', {
         description: 'Group pieces into an assembly and place mates',
         hidden: true,
       }),
@@ -797,7 +799,7 @@ export class App {
     this.moveVertexGizmo = new MoveVertexGizmo({
       snapEnabled: this.snapSettings.enabled,
       snapDistance: this.snapSettings.gridStep,
-      onDraggingChange: (dragging) => this.setGizmoDragState('moveVertex', dragging),
+      onDraggingChange: (dragging) => this.gizmos.setDragState('moveVertex', dragging),
     });
     this.moveVertexGizmo.attach(
       this.viewport.getScene(),
@@ -807,11 +809,8 @@ export class App {
 
     this.bodyRotateGizmo = new BodyRotateGizmo({
       snapEnabled: this.snapSettings.enabled,
-      onDraggingChange: (dragging) => this.setGizmoDragState('bodyRotate', dragging),
-      onActiveChange: (active) => {
-        this.bodyRotateSessionActive = active;
-        this.applyOrbitSuppression();
-      },
+      onDraggingChange: (dragging) => this.gizmos.setDragState('bodyRotate', dragging),
+      onActiveChange: (active) => this.gizmos.setRotateSessionActive(active),
     });
     this.bodyRotateGizmo.attach(
       this.viewport.getScene(),
@@ -839,44 +838,6 @@ export class App {
     });
 
     log.info('App initialized');
-  }
-
-  private createPanelContainer(
-    parent: HTMLElement,
-    title: string,
-    options: { description?: string; hidden?: boolean } = {},
-  ): HTMLElement {
-    const sectionOptions: import('./ui/CollapsiblePanelSection').CollapsiblePanelSectionOptions = {
-      expanded: this.workspacePreferences.expandedSections[title] ?? false,
-      onExpandedChange: (expanded) => {
-        this.workspacePreferences = this.workspacePreferencesStore.update({
-          expandedSections: { [title]: expanded },
-        });
-      },
-    };
-    if (options.description !== undefined) sectionOptions.description = options.description;
-    if (options.hidden !== undefined) sectionOptions.hidden = options.hidden;
-    const section = new CollapsiblePanelSection(parent, title, sectionOptions);
-    this.panelSections.set(title, section);
-    return section.content;
-  }
-
-  private expandPanelSection(title: string): void {
-    this.panelSections.get(title)?.setExpanded(true);
-  }
-
-  private collapsePanelSection(title: string): void {
-    this.panelSections.get(title)?.setExpanded(false);
-  }
-
-  /** Reveal a contextual section that is hidden by default. */
-  private showPanelSection(title: string): void {
-    this.panelSections.get(title)?.setHidden(false);
-  }
-
-  /** Remove a contextual section from the panel entirely (vs. collapse). */
-  private hidePanelSection(title: string): void {
-    this.panelSections.get(title)?.setHidden(true);
   }
 
   private refreshModelBrowser(): void {
@@ -1570,7 +1531,7 @@ export class App {
     });
     this.recentFilesPanel.setRecentFiles(this.recentFilesStore.list());
     // The Recent files section only appears when there's something to reopen.
-    this.panelSections.get('Recent files')?.setHidden(this.recentFilesStore.list().length === 0);
+    this.panelChrome.setHidden('Recent files', this.recentFilesStore.list().length === 0);
     // The quick-start overlay is never shown by default — it adds to an already
     // busy first-run screen. It is reachable on demand only (e.g. via Help).
     this.welcomeOverlay.refresh();
@@ -1738,8 +1699,8 @@ export class App {
     }
     this.featureTreePanel.selectFeature(feature.id);
     this.layout.expandSidebar('right');
-    this.collapsePanelSection('Active tool');
-    this.expandPanelSection('Properties');
+    this.panelChrome.collapse('Active tool');
+    this.panelChrome.expand('Properties');
     this.propertiesExpandedForFeatureId = feature.id;
     this.refreshUiChrome();
     queueMicrotask(() => {
@@ -1784,7 +1745,7 @@ export class App {
     });
     // The Woodworking section is contextual: it only appears once a body exists
     // (and there's something to tag or export), and hides on an empty scene.
-    this.panelSections.get('Woodworking')?.setHidden(this.rebuiltBodies.length === 0);
+    this.panelChrome.setHidden('Woodworking', this.rebuiltBodies.length === 0);
     this.refreshGrainDirections();
   }
 
@@ -2587,11 +2548,11 @@ export class App {
         this.visibleContextSessionId = session.id;
         this.layout.expandSidebar('right');
       }
-      this.expandPanelSection('Active tool');
-      this.collapsePanelSection('Properties');
+      this.panelChrome.expand('Active tool');
+      this.panelChrome.collapse('Properties');
       this.propertiesExpandedForFeatureId = null;
       if (session.kind === 'sketch-edit') {
-        this.expandPanelSection('Sketch');
+        this.panelChrome.expand('Sketch');
       }
       if (session.kind === 'placement' && this.placementSession) {
         const state = this.placementSession.readState();
@@ -2905,24 +2866,24 @@ export class App {
 
     if (this.browserContextTask) {
       this.layout.expandSidebar('right');
-      this.expandPanelSection('Active tool');
-      this.collapsePanelSection('Properties');
+      this.panelChrome.expand('Active tool');
+      this.panelChrome.collapse('Properties');
       this.contextTaskPanel.refreshState(this.browserContextTask);
       return;
     }
 
     const selectedFeature = this.featureTreePanel.getSelectedFeature();
     if (selectedFeature) {
-      this.collapsePanelSection('Active tool');
+      this.panelChrome.collapse('Active tool');
       if (this.propertiesExpandedForFeatureId !== selectedFeature.id) {
-        this.expandPanelSection('Properties');
+        this.panelChrome.expand('Properties');
         this.propertiesExpandedForFeatureId = selectedFeature.id;
       }
       this.contextTaskPanel.refreshState(null);
       return;
     }
     this.propertiesExpandedForFeatureId = null;
-    this.collapsePanelSection('Active tool');
+    this.panelChrome.collapse('Active tool');
     this.contextTaskPanel.refreshState(null);
   }
 
@@ -3570,6 +3531,15 @@ export class App {
       return;
     }
 
+    // While a rotate-creation session owns the gizmo, do not rebind to the
+    // direct-edit callbacks. Rebinding installs a session-start handler that
+    // starts a second ('rotate-body') session on the first ring drag; because
+    // its kind differs from 'rotate-body-create', ToolSessionManager supersedes
+    // (cancels) the creation session — making the rotation impossible to commit.
+    if (this.toolSessions.activeSession?.kind === 'rotate-body-create') {
+      return;
+    }
+
     const params = this.getRotateBodyParams(selectedFeature);
     if (!selectedFeature || !params) {
       this.bodyRotateGizmo.hide();
@@ -3711,47 +3681,10 @@ export class App {
     return !this.sketchModeController.isActive && this.rebuiltBodies.length > 0;
   }
 
-  /** True while any gizmo is dragging or the modal rotate session is open. */
-  private isAnyGizmoOwningNavigation(): boolean {
-    return (
-      this.gizmoDragState.pushPull ||
-      this.gizmoDragState.bodyRotate ||
-      this.gizmoDragState.moveVertex ||
-      this.gizmoDragState.instance ||
-      this.gizmoDragState.moveCopy ||
-      this.bodyRotateSessionActive
-    );
-  }
-
   /** Tool-claimant for the gesture router: own the press while a gizmo is dragging. */
   private isPointerClaimedByGizmo(pointerId: number): boolean {
     if (this.pushPullGizmo?.ownsPointer(pointerId)) return true;
-    return this.isAnyGizmoOwningNavigation();
-  }
-
-  /** Centralized camera-navigation suppression shared by every gizmo. */
-  private applyOrbitSuppression(): void {
-    this.viewport.getCameraControls().orbitControls.enabled = !this.isAnyGizmoOwningNavigation();
-  }
-
-  /** Record a gizmo drag-state change and re-evaluate camera suppression. */
-  private setGizmoDragState(
-    key: 'pushPull' | 'bodyRotate' | 'moveVertex' | 'instance' | 'moveCopy',
-    dragging: boolean,
-  ): void {
-    this.gizmoDragState[key] = dragging;
-    this.applyOrbitSuppression();
-  }
-
-  /** Clear every gizmo navigation claim (used when a tool session ends). */
-  private releaseAllGizmoNavigation(): void {
-    this.gizmoDragState.pushPull = false;
-    this.gizmoDragState.bodyRotate = false;
-    this.gizmoDragState.moveVertex = false;
-    this.gizmoDragState.instance = false;
-    this.gizmoDragState.moveCopy = false;
-    this.bodyRotateSessionActive = false;
-    this.applyOrbitSuppression();
+    return this.gizmos.isAnyOwningNavigation();
   }
 
   private setupEventHandlers(): void {
@@ -3765,7 +3698,7 @@ export class App {
     // actually produces errors or warnings, and hide it again when it's clean.
     const syncDiagnosticsSection = (diagnostics: unknown) => {
       const count = Array.isArray(diagnostics) ? diagnostics.length : 0;
-      this.panelSections.get('Diagnostics')?.setHidden(count === 0);
+      this.panelChrome.setHidden('Diagnostics', count === 0);
     };
     eventBus.on('rebuild:complete', ({ diagnostics }) => syncDiagnosticsSection(diagnostics));
     eventBus.on('rebuild:failed', ({ diagnostics }) => syncDiagnosticsSection(diagnostics));
@@ -3775,7 +3708,7 @@ export class App {
       handle: () => undefined,
     });
     this.pointerGestureRouter.setNavigationClaimant({
-      claim: () => !this.isAnyGizmoOwningNavigation(),
+      claim: () => !this.gizmos.isAnyOwningNavigation(),
       handle: () => undefined,
     });
     this.pointerGestureRouter.setSelectionHandler((gesture) => {
@@ -5545,7 +5478,7 @@ export class App {
         return true;
       },
       onDraggingChange: (dragging: boolean) => {
-        this.setGizmoDragState('moveCopy', dragging);
+        this.gizmos.setDragState('moveCopy', dragging);
       },
       onCommit: () => this.commitFeaturePreview(),
       onCancel: () => this.cancelFeaturePreview(),
@@ -5695,7 +5628,7 @@ export class App {
     this.translationTriadGizmo.hide(false);
     this.bodyRotateGizmo?.hide();
     this.removeMoveCopyPreviewClone();
-    this.releaseAllGizmoNavigation();
+    this.gizmos.releaseAll();
     this.clearFeaturePreviewState();
     this.selectFeatureById(feature.id);
     eventBus.emit('ui:status', { message: `Added ${feature.name}` });
@@ -5708,7 +5641,7 @@ export class App {
     this.translationTriadGizmo.hide(true);
     this.bodyRotateGizmo?.hide();
     this.removeMoveCopyPreviewClone();
-    this.releaseAllGizmoNavigation();
+    this.gizmos.releaseAll();
     const result = transaction?.state === 'active' ? transaction.cancel() : null;
     this.featureTreePanel.setFeatures(this.features);
     this.clearFeaturePreviewState();
@@ -6497,7 +6430,8 @@ export class App {
     }
     // The Assembly section is contextual: it only appears once you've grouped
     // pieces (created a component) or placed a copy (instance).
-    this.panelSections.get('Assembly')?.setHidden(
+    this.panelChrome.setHidden(
+      'Assembly',
       this.components.length === 0 && this.componentInstances.length === 0,
     );
   }
@@ -6543,7 +6477,7 @@ export class App {
             return this.instanceTransformTransaction?.preview(transform) ?? false;
           },
           onDraggingChange: (dragging) => {
-            this.setGizmoDragState('instance', dragging);
+            this.gizmos.setDragState('instance', dragging);
           },
         });
       },
@@ -6575,7 +6509,7 @@ export class App {
     const nextTransform = Array.from(new THREE.Matrix4().multiplyMatrices(delta, baseline).elements);
     instance.transform = nextTransform;
     this.instanceTransformGizmo?.hide(false);
-    this.releaseAllGizmoNavigation();
+    this.gizmos.releaseAll();
 
     const result = this.rebuildAll(`Move ${instance.name}`, { trackHistory: false });
     if (!result.ok) {
@@ -6597,7 +6531,7 @@ export class App {
   private cancelInstanceTransformSession(): void {
     const transaction = this.instanceTransformTransaction;
     this.instanceTransformGizmo?.hide(true);
-    this.releaseAllGizmoNavigation();
+    this.gizmos.releaseAll();
     this.instanceTransformTransaction = null;
     this.activeInstanceTransformId = null;
     const result = transaction?.state === 'active' ? transaction.cancel() : null;
@@ -6689,7 +6623,7 @@ export class App {
     this.resetSketchLineDraft();
     this.sketchOverlay.clearOperationPreview();
     // Remove the Sketch section now that we're back to modeling.
-    this.hidePanelSection('Sketch');
+    this.panelChrome.hide('Sketch');
     eventBus.emit('ui:status', { message: 'Exited sketch mode' });
   }
 
@@ -7522,8 +7456,8 @@ export class App {
     this.updateSketchOverlayTool();
     this.sketchOverlay.setSelectedEntity(this.selectedSketchEntityId);
     // The Sketch section only appears while sketch mode is active.
-    this.showPanelSection('Sketch');
-    this.expandPanelSection('Sketch');
+    this.panelChrome.show('Sketch');
+    this.panelChrome.expand('Sketch');
     eventBus.emit('ui:status', {
       message: sketch.entities.length === 0
         ? `Sketch mode on ${this.describePlaneRef(sketch.planeRef)} - drag to draw a rectangle or switch to Line for custom prism profiles`
@@ -8482,7 +8416,7 @@ export class App {
     this.pushPullInitialFace = initialFace ? { ...initialFace } : null;
     this.pushPullDistanceInput = '0';
     this.pushPullDistanceError = null;
-    this.collapsePanelSection('Properties');
+    this.panelChrome.collapse('Properties');
     this.propertiesExpandedForFeatureId = null;
     this.setSelectionMode('face', false);
 
@@ -8493,7 +8427,7 @@ export class App {
       this.pushPullGizmo = new PushPullGizmo({
         snapSettings: this.snapSettings,
         onDraggingChange: (dragging) => {
-          this.setGizmoDragState('pushPull', dragging);
+          this.gizmos.setDragState('pushPull', dragging);
         },
       });
       this.pushPullGizmo.attach(
@@ -8602,7 +8536,7 @@ export class App {
     if (this.pushPullGizmo) {
       this.pushPullGizmo.hide();
     }
-    this.releaseAllGizmoNavigation();
+    this.gizmos.releaseAll();
 
     // Remove event listener
     eventBus.off('face:selected', this.handlePushPullFaceSelected);
