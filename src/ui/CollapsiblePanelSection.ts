@@ -39,6 +39,10 @@ export class CollapsiblePanelSection {
     this.toggleButton.type = 'button';
     this.toggleButton.className = 'panel-section__toggle';
     this.toggleButton.setAttribute('aria-controls', contentId);
+    // The description text lives inside the toggle for sighted users, but the
+    // toggle's accessible name should be exactly the section title (so it can be
+    // found by exact role/name lookups and announced cleanly by AT).
+    this.toggleButton.setAttribute('aria-label', title);
 
     const heading = document.createElement('span');
     heading.className = 'panel-section__heading';
