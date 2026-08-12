@@ -3,8 +3,8 @@
  * Ensures vertex movements preserve planarity of adjacent faces.
  */
 
-import { PLANARITY_TOLERANCE, computePlaneEquation } from './SubObjectTypes';
-import type { Body } from './Body';
+import { computePlaneEquation } from './SubObjectTypes';
+import { DEFAULT_TOLERANCE_POLICY } from './TolerancePolicy';
 import { createModuleLogger } from '../core/logger';
 
 const log = createModuleLogger('PlanarityGuard');
@@ -17,7 +17,7 @@ const log = createModuleLogger('PlanarityGuard');
  */
 export function isPolygonPlanar(
   points: [number, number, number][],
-  tolerance: number = PLANARITY_TOLERANCE
+  tolerance: number = DEFAULT_TOLERANCE_POLICY.planarity
 ): boolean {
   if (points.length < 3) return true;
   if (points.length === 3) return true; // Triangle is always planar

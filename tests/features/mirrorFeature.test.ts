@@ -15,7 +15,7 @@ import {
   type MirrorParams,
 } from '../../src/features/pattern/MirrorFeature';
 import { createBoxFeature, rebuildBox, createRebuildContext, registerBodies } from '../../src/features';
-import { createWorldPlaneRef } from '../../src/sketch';
+import { createWorldPlaneRef, createFacePlaneRef } from '../../src/sketch';
 import type { FeatureRecord } from '../../src/features';
 
 describe('MirrorFeature', () => {
@@ -23,11 +23,7 @@ describe('MirrorFeature', () => {
     it('should pass for valid world plane reference', () => {
       const params: MirrorParams = {
         sourceFeatureId: 'feature-1',
-        planeRef: {
-          type: 'world',
-          worldPlane: 'yz',
-          offset: 0,
-        },
+        planeRef: createWorldPlaneRef('yz', 0),
       };
 
       const diagnostics = validateMirrorParams(params);
@@ -37,11 +33,7 @@ describe('MirrorFeature', () => {
     it('should pass for valid face plane reference', () => {
       const params: MirrorParams = {
         sourceFeatureId: 'feature-1',
-        planeRef: {
-          type: 'face',
-          faceId: 'face-1',
-          bodyId: 'body-1',
-        },
+        planeRef: createFacePlaneRef('face-1', 'body-1'),
       };
 
       const diagnostics = validateMirrorParams(params);
@@ -184,6 +176,7 @@ describe('MirrorFeature', () => {
 
       const sourceResult = rebuildBox(sourceFeature, createRebuildContext());
       expect(sourceResult.ok).toBe(true);
+      if (!sourceResult.ok) return;
 
       let context = createRebuildContext();
       context = registerBodies(context, sourceFeature.id, sourceResult.bodies);
@@ -194,6 +187,7 @@ describe('MirrorFeature', () => {
 
       const result = rebuildMirror(mirrorFeature, context);
       expect(result.ok).toBe(true);
+      if (!result.ok) return;
       expect(result.bodies).toHaveLength(1);
 
       // Mirrored body should have mirrored ID
@@ -209,6 +203,7 @@ describe('MirrorFeature', () => {
       });
 
       const sourceResult = rebuildBox(sourceFeature, createRebuildContext());
+      if (!sourceResult.ok) return;
 
       let context = createRebuildContext();
       context = registerBodies(context, sourceFeature.id, sourceResult.bodies);
@@ -219,6 +214,7 @@ describe('MirrorFeature', () => {
 
       const result = rebuildMirror(mirrorFeature, context);
       expect(result.ok).toBe(true);
+      if (!result.ok) return;
 
       // Verify vertices are mirrored
       const mirroredBody = result.bodies[0];

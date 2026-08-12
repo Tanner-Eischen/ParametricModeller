@@ -32,6 +32,7 @@ export class FeatureTreePanel {
   private createListElement(): HTMLElement {
     const list = document.createElement('div');
     list.className = 'feature-tree';
+    list.dataset.testid = 'feature-tree';
     list.style.cssText = `
       display: flex;
       flex-direction: column;
@@ -66,9 +67,22 @@ export class FeatureTreePanel {
    * Set the features to display.
    */
   setFeatures(features: FeatureRecord[]): void {
+    const previousSelection = this.selectedFeatureId;
     this.features = [...features];
-    this.selectedFeatureId = null;
+    if (this.selectedFeatureId &&
+      !this.features.some((feature) => feature.id === this.selectedFeatureId)) {
+      this.selectedFeatureId = null;
+    }
     this.render();
+    if (previousSelection && !this.selectedFeatureId) {
+      eventBus.emit('ui:property-inspector:clear', {});
+    }
+    if (this.selectedFeatureId) {
+      const feature = this.features.find((item) => item.id === this.selectedFeatureId);
+      if (feature) {
+        eventBus.emit('ui:property-inspector', { feature });
+      }
+    }
     log.debug('Features set', { count: features.length });
   }
 
@@ -105,6 +119,8 @@ export class FeatureTreePanel {
       if (feature) {
         eventBus.emit('ui:property-inspector', { feature });
       }
+    } else {
+      eventBus.emit('ui:property-inspector:clear', {});
     }
   }
 
@@ -112,7 +128,10 @@ export class FeatureTreePanel {
    * Get the currently selected feature.
    */
   getSelectedFeature(): FeatureRecord | null {
-    if (!this.selectedFeatureId) return null;
+    if (!this.selectedFeatureId) {
+      return null;
+    }
+
     return this.features.find((f) => f.id === this.selectedFeatureId) ?? null;
   }
 
@@ -144,6 +163,7 @@ export class FeatureTreePanel {
     const item = document.createElement('div');
     item.className = 'feature-item';
     item.dataset.featureId = feature.id;
+    item.dataset.featureType = feature.type;
     item.style.cssText = `
       display: flex;
       align-items: center;
@@ -156,19 +176,23 @@ export class FeatureTreePanel {
       opacity: ${feature.suppressed ? '0.5' : '1'};
     `;
 
-    // Icon
     const icon = document.createElement('span');
     icon.textContent = this.getFeatureIcon(feature.type);
-    icon.style.cssText = 'font-size: 16px; width: 20px; text-align: center;';
+    icon.style.cssText = `
+      font-size: 11px;
+      width: 24px;
+      text-align: center;
+      color: #9dc8ff;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    `;
     item.appendChild(icon);
 
-    // Name
     const name = document.createElement('span');
     name.textContent = feature.name;
     name.style.cssText = 'flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
     item.appendChild(name);
 
-    // Type badge
     const badge = document.createElement('span');
     badge.textContent = feature.type.toUpperCase();
     badge.style.cssText = `
@@ -180,9 +204,9 @@ export class FeatureTreePanel {
     `;
     item.appendChild(badge);
 
-    // Click handler
     item.addEventListener('click', () => {
       this.selectFeature(feature.id);
+      eventBus.emit('feature:selected', { featureId: feature.id });
     });
 
     this.listElement.appendChild(item);
@@ -207,30 +231,38 @@ export class FeatureTreePanel {
   }
 
   /**
-   * Get an icon for a feature type.
+   * Get a short ASCII tag for a feature type.
    */
   private getFeatureIcon(type: string): string {
     const icons: Record<string, string> = {
-      box: '▢',
-      sketch: '✎',
-      extrude: '↑',
-      extrudeCut: '⬇',
-      revolve: '↻',
-      fillet: '⌒',
-      chamfer: '◇',
-      boolean_union: '∪',
-      boolean_subtract: '∩',
-      boolean_intersect: '∧',
-      mirror: '⇆',
-      linearPattern: '≡',
-      pattern_linear: '≡',
-      pattern_circular: '◎',
-      createComponent: '📦',
-      addInstance: '📍',
-      moveVertex: '✥',
-      duplicate: '⧉',
+      box: 'BX',
+      sketch: 'SK',
+      extrude: 'EX',
+      extrudeCut: 'CT',
+      miterCut: 'MT',
+      revolve: 'RV',
+      fillet: 'FL',
+      chamfer: 'CH',
+      boolean_union: 'UN',
+      boolean_subtract: 'SB',
+      boolean_intersect: 'IN',
+      mirror: 'MR',
+      linearPattern: 'PT',
+      pattern_linear: 'PT',
+      pattern_circular: 'CP',
+      createComponent: 'CM',
+      addInstance: 'IN',
+      moveVertex: 'MV',
+      duplicate: 'DP',
+      moveCopy: 'MC',
+      rotateBody: 'RT',
+      joinBodies: 'CB',
+      bodyBoolean: 'BL',
+      transformBodies: 'TR',
+      woodJoint: 'JT',
     };
-    return icons[type] ?? '?';
+
+    return icons[type] ?? '--';
   }
 
   /**

@@ -43,36 +43,51 @@ export class SubObjectSelectionPanel {
    */
   private render(): void {
     this.container.innerHTML = '';
-    this.container.style.display = 'flex';
-    this.container.style.gap = '4px';
-    this.container.style.padding = '4px';
+    this.container.className = 'subobject-selection-panel';
+
+    const header = document.createElement('div');
+    header.className = 'subobject-selection-panel__header';
+
+    const title = document.createElement('div');
+    title.className = 'subobject-selection-panel__title';
+    title.textContent = 'Selection mode';
+    header.appendChild(title);
+
+    const description = document.createElement('p');
+    description.className = 'subobject-selection-panel__description';
+    description.textContent = 'Choose what the viewport can pick. Vertex mode reveals pick markers; Move Vertex starts only when requested.';
+    header.appendChild(description);
+
+    this.container.appendChild(header);
+
+    const buttons = document.createElement('div');
+    buttons.className = 'subobject-selection-panel__buttons';
+    this.container.appendChild(buttons);
 
     const modes: { mode: SubObjectType; label: string; title: string }[] = [
-      { mode: 'body', label: 'B', title: 'Body selection' },
-      { mode: 'face', label: 'F', title: 'Face selection' },
-      { mode: 'edge', label: 'E', title: 'Edge selection' },
-      { mode: 'vertex', label: 'V', title: 'Vertex selection' },
+      { mode: 'body', label: 'Body', title: 'Select whole bodies' },
+      { mode: 'face', label: 'Face', title: 'Select faces for sketching and push/pull' },
+      { mode: 'edge', label: 'Edge', title: 'Select edges for edge-aware tools' },
+      { mode: 'vertex', label: 'Vertex', title: 'Select vertices for guarded vertex editing' },
     ];
 
     for (const { mode, label, title } of modes) {
       const button = document.createElement('button');
       button.textContent = label;
       button.title = title;
-      button.style.cssText = `
-        padding: 4px 8px;
-        border: 1px solid #444;
-        border-radius: 4px;
-        background: #2a2a2a;
-        color: #ccc;
-        cursor: pointer;
-        font-size: 12px;
-        min-width: 28px;
-      `;
+      button.className = 'subobject-selection-panel__button';
+      button.dataset.mode = mode;
+      button.setAttribute('aria-pressed', String(mode === this.currentMode));
 
       button.addEventListener('click', () => this.setMode(mode));
-      this.container.appendChild(button);
+      buttons.appendChild(button);
       this.buttons.set(mode, button);
     }
+
+    const note = document.createElement('p');
+    note.className = 'subobject-selection-panel__note';
+    note.textContent = 'Use the help menu for shortcut and workflow reminders.';
+    this.container.appendChild(note);
   }
 
   /**
@@ -81,13 +96,11 @@ export class SubObjectSelectionPanel {
   private updateButtonStates(): void {
     for (const [mode, button] of this.buttons) {
       if (mode === this.currentMode) {
-        button.style.background = '#4a4a4a';
-        button.style.color = '#fff';
-        button.style.borderColor = '#666';
+        button.dataset.active = 'true';
+        button.setAttribute('aria-pressed', 'true');
       } else {
-        button.style.background = '#2a2a2a';
-        button.style.color = '#ccc';
-        button.style.borderColor = '#444';
+        delete button.dataset.active;
+        button.setAttribute('aria-pressed', 'false');
       }
     }
   }

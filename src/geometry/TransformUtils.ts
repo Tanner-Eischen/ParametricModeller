@@ -5,19 +5,15 @@
 
 import * as THREE from 'three';
 import { createBody, addVertex, addEdge, addFace, addPlane, type Body } from './Body';
-import type { Vertex } from './Vertex';
-import type { Edge } from './Edge';
-import type { Face } from './Face';
-import type { Plane } from './Plane';
 import { createVertex } from './Vertex';
 import { createEdge } from './Edge';
 import { createFace } from './Face';
-import { createPlane } from './Plane';
-import { generateId } from '../core/id';
+import type { Plane } from './Plane';
+import { createTopologyIdAllocator } from './TopologyIdAllocator';
+import { DEFAULT_TOLERANCE_POLICY } from './TolerancePolicy';
 
-/**
- * Apply a 4x4 transformation matrix to a 3D point.
- */
+const JOIN_TOLERANCE = DEFAULT_TOLERANCE_POLICY.linear;
+
 function transformPoint(
   point: [number, number, number],
   matrix: THREE.Matrix4
@@ -27,9 +23,6 @@ function transformPoint(
   return [v.x, v.y, v.z];
 }
 
-/**
- * Apply a 4x4 transformation matrix to a direction vector (no translation).
- */
 function transformDirection(
   direction: [number, number, number],
   matrix: THREE.Matrix4
@@ -39,305 +32,358 @@ function transformDirection(
   return [v.x, v.y, v.z];
 }
 
+function copyBodyTopology(
+  body: Body,
+  newId: string,
+  transformVertex: (position: [number, number, number]) => [number, number, number],
+  transformPlane?: (plane: Plane) => Plane
+): Body {
+  const clonedBody = createBody(newId, body.name);
+  const allocator = createTopologyIdAllocator(newId);
+  const vertexIdMap = new Map<string, string>();
+  const edgeIdMap = new Map<string, string>();
+  const planeIdMap = new Map<string, string>();
+
+  for (const [oldId, vertex] of body.vertices) {
+    const newVertexId = allocator.vertex(oldId);
+    vertexIdMap.set(oldId, newVertexId);
+    addVertex(clonedBody, createVertex(transformVertex(vertex.position), newVertexId));
+  }
+
+  for (const [oldId, edge] of body.edges) {
+    const newEdgeId = allocator.edge(oldId);
+    edgeIdMap.set(oldId, newEdgeId);
+    addEdge(
+      clonedBody,
+      createEdge(
+        vertexIdMap.get(edge.vertexIds[0]) ?? edge.vertexIds[0],
+        vertexIdMap.get(edge.vertexIds[1]) ?? edge.vertexIds[1],
+        newEdgeId
+      )
+    );
+  }
+
+  for (const [planeId, plane] of body.planes) {
+    const newPlaneId = allocator.plane(planeId);
+    planeIdMap.set(planeId, newPlaneId);
+    const transformedPlane = transformPlane ? transformPlane(plane) : plane;
+    addPlane(clonedBody, transformedPlane, newPlaneId);
+  }
+
+  for (const [oldId, face] of body.faces) {
+    const newFaceId = allocator.face(oldId);
+    const newBoundaryEdgeIds = face.boundaryEdgeIds.map((edgeId) => edgeIdMap.get(edgeId) ?? edgeId);
+    const newInnerBoundaryEdgeIds = face.innerBoundaryEdgeIds?.map((loop) =>
+      loop.map((edgeId) => edgeIdMap.get(edgeId) ?? edgeId)
+    );
+    const newPlaneId = planeIdMap.get(face.planeId) ?? face.planeId;
+    addFace(clonedBody, {
+      ...createFace(newPlaneId, newBoundaryEdgeIds, newFaceId, face.name),
+      ...(newInnerBoundaryEdgeIds ? { innerBoundaryEdgeIds: newInnerBoundaryEdgeIds } : {}),
+    });
+  }
+
+  return clonedBody;
+}
+
 /**
  * Create a translated copy of a body.
- * All vertices are offset by the translation vector.
- *
- * @param body - The source body to translate
- * @param offset - The translation vector [dx, dy, dz]
- * @param newId - Optional new ID for the translated body
- * @returns A new body with translated geometry
  */
 export function translateBody(
   body: Body,
   offset: [number, number, number],
   newId?: string
 ): Body {
-  const translatedBody = createBody(newId ?? `${body.id}_translated`, body.name);
-
-  // Create translation matrix
   const matrix = new THREE.Matrix4().makeTranslation(...offset);
-
-  // Build vertex ID mapping (old -> new)
-  const vertexIdMap = new Map<string, string>();
-
-  // Translate vertices
-  for (const [oldId, vertex] of body.vertices) {
-    const newVertexId = generateId();
-    vertexIdMap.set(oldId, newVertexId);
-
-    const newPosition = transformPoint(vertex.position, matrix);
-    const newVertex = createVertex(newPosition, newVertexId);
-    addVertex(translatedBody, newVertex);
-  }
-
-  // Copy edges with new vertex references
-  for (const [oldId, edge] of body.edges) {
-    const newEdgeId = generateId();
-    const newVertexIds = edge.vertexIds.map(vid => vertexIdMap.get(vid) ?? vid);
-
-    const newEdge = createEdge(newVertexIds, newEdgeId);
-    addEdge(translatedBody, newEdge);
-  }
-
-  // Copy faces with same edge IDs (edges were added with same IDs conceptually)
-  // We need to track edge ID mapping too
-  const edgeIdMap = new Map<string, string>();
-  let edgeIndex = 0;
-  for (const oldId of body.edges.keys()) {
-    const newEdges = Array.from(translatedBody.edges.values());
-    if (newEdges[edgeIndex]) {
-      edgeIdMap.set(oldId, newEdges[edgeIndex].id);
-    }
-    edgeIndex++;
-  }
-
-  // Actually rebuild faces with correct edge IDs
-  translatedBody.faces.clear();
-  translatedBody.edges.clear();
-
-  // Rebuild with correct mappings
-  const freshBody = createBody(newId ?? `${body.id}_translated`, body.name);
-
-  // Map for vertex IDs
-  const freshVertexIdMap = new Map<string, string>();
-
-  // Add translated vertices
-  for (const [oldId, vertex] of body.vertices) {
-    const newVertexId = generateId();
-    freshVertexIdMap.set(oldId, newVertexId);
-
-    const newPosition = transformPoint(vertex.position, matrix);
-    const newVertex = createVertex(newPosition, newVertexId);
-    addVertex(freshBody, newVertex);
-  }
-
-  // Map for edge IDs
-  const freshEdgeIdMap = new Map<string, string>();
-
-  // Add edges with remapped vertex IDs
-  for (const [oldId, edge] of body.edges) {
-    const newEdgeId = generateId();
-    freshEdgeIdMap.set(oldId, newEdgeId);
-
-    const newVertexIds = edge.vertexIds.map(vid => freshVertexIdMap.get(vid) ?? vid);
-    const newEdge = createEdge(newVertexIds, newEdgeId);
-    addEdge(freshBody, newEdge);
-  }
-
-  // Add faces with remapped edge IDs
-  for (const [oldId, face] of body.faces) {
-    const newFaceId = generateId();
-    const newBoundaryEdgeIds = face.boundaryEdgeIds.map(eid => freshEdgeIdMap.get(eid) ?? eid);
-
-    const newFace = createFace(face.planeId, newBoundaryEdgeIds, newFaceId, face.name);
-    addFace(freshBody, newFace);
-  }
-
-  // Copy planes (translated - planes maintain their orientation, just origin moves)
-  for (const [planeId, plane] of body.planes) {
-    const newOrigin = transformPoint(plane.origin, matrix);
-    const newPlane = createPlane(newOrigin, plane.normal);
-    addPlane(freshBody, newPlane, planeId);
-  }
-
-  return freshBody;
+  return copyBodyTopology(
+    body,
+    newId ?? `${body.id}_translated`,
+    (position) => transformPoint(position, matrix),
+    (plane) => ({
+      ...plane,
+      origin: transformPoint(plane.origin, matrix),
+    })
+  );
 }
 
 /**
  * Create a mirrored copy of a body across a plane.
- * For proper mirroring:
- * - Vertices are reflected across the mirror plane
- * - Face normals are flipped (by reversing boundary edge order)
- * - Plane normals are flipped
- *
- * @param body - The source body to mirror
- * @param mirrorPlane - The plane to mirror across
- * @param newId - Optional new ID for the mirrored body
- * @returns A new body with mirrored geometry
  */
 export function mirrorBody(
   body: Body,
   mirrorPlane: Plane,
   newId?: string
 ): Body {
-  const mirroredBody = createBody(newId ?? `${body.id}_mirror`, body.name);
-
-  // Create reflection matrix across the plane
-  // Reflection: P' = P - 2 * (P - origin) . normal * normal
   const origin = new THREE.Vector3(...mirrorPlane.origin);
   const normal = new THREE.Vector3(...mirrorPlane.normal);
 
-  // Map for vertex IDs
-  const vertexIdMap = new Map<string, string>();
+  const reflectPoint = (point: [number, number, number]): [number, number, number] => {
+    const p = new THREE.Vector3(...point);
+    const reflected = p.clone().sub(normal.clone().multiplyScalar(2 * p.clone().sub(origin).dot(normal)));
+    return [reflected.x, reflected.y, reflected.z];
+  };
 
-  // Mirror vertices
-  for (const [oldId, vertex] of body.vertices) {
-    const newVertexId = generateId();
-    vertexIdMap.set(oldId, newVertexId);
+  const reflectedBody = copyBodyTopology(
+    body,
+    newId ?? `${body.id}_mirror`,
+    reflectPoint,
+    (plane) => {
+      const planeOrigin = new THREE.Vector3(...plane.origin);
+      const planeNormal = new THREE.Vector3(...plane.normal);
+      const planeUAxis = new THREE.Vector3(...plane.uAxis);
 
-    const p = new THREE.Vector3(...vertex.position);
-    // Reflect: p' = p - 2 * dot(p - origin, normal) * normal
-    const reflected = p.clone().sub(
-      normal.clone().multiplyScalar(2 * p.clone().sub(origin).dot(normal))
-    );
+      const reflectedOrigin = planeOrigin.clone().sub(
+        normal.clone().multiplyScalar(2 * planeOrigin.clone().sub(origin).dot(normal))
+      );
+      const reflectedNormal = planeNormal.clone().sub(normal.clone().multiplyScalar(2 * planeNormal.dot(normal)));
+      const reflectedU = planeUAxis.clone().sub(normal.clone().multiplyScalar(2 * planeUAxis.dot(normal)));
 
-    const newVertex = createVertex([reflected.x, reflected.y, reflected.z], newVertexId);
-    addVertex(mirroredBody, newVertex);
-  }
+      return {
+        origin: [reflectedOrigin.x, reflectedOrigin.y, reflectedOrigin.z],
+        normal: [reflectedNormal.x, reflectedNormal.y, reflectedNormal.z],
+        uAxis: [reflectedU.x, reflectedU.y, reflectedU.z],
+        vAxis: new THREE.Vector3()
+          .crossVectors(reflectedNormal, reflectedU)
+          .normalize()
+          .toArray() as [number, number, number],
+      };
+    }
+  );
 
-  // Map for edge IDs
-  const edgeIdMap = new Map<string, string>();
-
-  // Add edges with remapped vertex IDs
-  for (const [oldId, edge] of body.edges) {
-    const newEdgeId = generateId();
-    edgeIdMap.set(oldId, newEdgeId);
-
-    const newVertexIds = edge.vertexIds.map(vid => vertexIdMap.get(vid) ?? vid);
-    const newEdge = createEdge(newVertexIds, newEdgeId);
-    addEdge(mirroredBody, newEdge);
-  }
-
-  // Add faces with REVERSED edge order to flip normals
-  // When mirroring, the face orientation is reversed
-  for (const [oldId, face] of body.faces) {
-    const newFaceId = generateId();
-    // Reverse the boundary edge order to flip the face normal
-    const reversedBoundaryEdgeIds = [...face.boundaryEdgeIds].reverse().map(
-      eid => edgeIdMap.get(eid) ?? eid
-    );
-
-    // Face plane ID will be remapped below
-    const newFace = createFace(face.planeId, reversedBoundaryEdgeIds, newFaceId, face.name);
-    addFace(mirroredBody, newFace);
-  }
-
-  // Mirror planes with flipped normals
-  for (const [planeId, plane] of body.planes) {
-    const p = new THREE.Vector3(...plane.origin);
-    // Reflect origin
-    const reflectedOrigin = p.clone().sub(
-      normal.clone().multiplyScalar(2 * p.clone().sub(origin).dot(normal))
-    );
-
-    // Reflect normal
-    const n = new THREE.Vector3(...plane.normal);
-    const reflectedNormal = n.clone().sub(
-      normal.clone().multiplyScalar(2 * n.dot(normal))
-    );
-
-    // Create new plane with reflected origin and normal
-    // The uAxis and vAxis also need to be reflected
-    const u = new THREE.Vector3(...plane.uAxis);
-    const reflectedU = u.clone().sub(
-      normal.clone().multiplyScalar(2 * u.dot(normal))
-    );
-
-    const newPlane = createPlane(
-      [reflectedOrigin.x, reflectedOrigin.y, reflectedOrigin.z],
-      [reflectedNormal.x, reflectedNormal.y, reflectedNormal.z]
-    );
-
-    // Override the uAxis with the reflected one
-    const finalPlane: Plane = {
-      origin: [reflectedOrigin.x, reflectedOrigin.y, reflectedOrigin.z],
-      normal: [reflectedNormal.x, reflectedNormal.y, reflectedNormal.z],
-      uAxis: [reflectedU.x, reflectedU.y, reflectedU.z],
-      // vAxis is computed as normal cross uAxis, which should be correct
-      vAxis: new THREE.Vector3()
-        .crossVectors(
-          new THREE.Vector3(reflectedNormal.x, reflectedNormal.y, reflectedNormal.z),
-          new THREE.Vector3(reflectedU.x, reflectedU.y, reflectedU.z)
-        )
-        .normalize()
-        .toArray() as [number, number, number],
-    };
-
-    addPlane(mirroredBody, finalPlane, planeId);
-  }
-
-  return mirroredBody;
+  return reflectedBody;
 }
 
 /**
  * Apply a 4x4 transformation matrix to all vertices in a body.
- * Creates a new body with transformed vertices.
- *
- * @param body - The source body to transform
- * @param matrix - The 4x4 transformation matrix
- * @param newId - Optional new ID for the transformed body
- * @returns A new body with transformed geometry
  */
 export function transformVertexPositions(
   body: Body,
   matrix: THREE.Matrix4,
   newId?: string
 ): Body {
-  const transformedBody = createBody(newId ?? `${body.id}_transformed`, body.name);
+  return copyBodyTopology(
+    body,
+    newId ?? `${body.id}_transformed`,
+    (position) => transformPoint(position, matrix),
+    (plane) => ({
+      origin: transformPoint(plane.origin, matrix),
+      normal: transformDirection(plane.normal, matrix),
+      uAxis: transformDirection(plane.uAxis, matrix),
+      vAxis: transformDirection(plane.vAxis, matrix),
+    })
+  );
+}
 
-  // Map for vertex IDs
-  const vertexIdMap = new Map<string, string>();
-
-  // Transform vertices
-  for (const [oldId, vertex] of body.vertices) {
-    const newVertexId = generateId();
-    vertexIdMap.set(oldId, newVertexId);
-
-    const newPosition = transformPoint(vertex.position, matrix);
-    const newVertex = createVertex(newPosition, newVertexId);
-    addVertex(transformedBody, newVertex);
+/**
+ * Combine multiple bodies into a single body by copying their topology into one container.
+ * v1 preserves interior faces when bodies touch or overlap.
+ */
+export function combineBodies(
+  bodies: Body[],
+  newId?: string,
+  name?: string
+): Body {
+  if (bodies.length === 0) {
+    throw new Error('combineBodies requires at least one body');
   }
 
-  // Map for edge IDs
-  const edgeIdMap = new Map<string, string>();
+  const combinedBodyId = newId ?? `${bodies[0]!.id}_combined`;
+  const allocator = createTopologyIdAllocator(combinedBodyId);
 
-  // Add edges with remapped vertex IDs
-  for (const [oldId, edge] of body.edges) {
-    const newEdgeId = generateId();
-    edgeIdMap.set(oldId, newEdgeId);
+  type FaceDraft = {
+    name: string | undefined;
+    plane: Plane;
+    planeSignature: string;
+    signature: string;
+    normal: [number, number, number];
+    boundaryEdgeIds: string[];
+  };
 
-    const newVertexIds = edge.vertexIds.map(vid => vertexIdMap.get(vid) ?? vid);
-    const newEdge = createEdge(newVertexIds, newEdgeId);
-    addEdge(transformedBody, newEdge);
+  const mergedVertices = new Map<string, { id: string; position: [number, number, number] }>();
+  const mergedEdges = new Map<string, { id: string; vertexIds: [string, string] }>();
+  const faceDrafts: FaceDraft[] = [];
+
+  for (const sourceBody of bodies) {
+    const vertexIdMap = new Map<string, string>();
+    const edgeIdMap = new Map<string, string>();
+
+    for (const [sourceVertexId, vertex] of sourceBody.vertices) {
+      const key = getPointKey(vertex.position);
+      const existing = mergedVertices.get(key);
+      if (existing) {
+        vertexIdMap.set(sourceVertexId, existing.id);
+        continue;
+      }
+
+      const nextVertexId = allocator.vertex(key);
+      mergedVertices.set(key, {
+        id: nextVertexId,
+        position: [...vertex.position] as [number, number, number],
+      });
+      vertexIdMap.set(sourceVertexId, nextVertexId);
+    }
+
+    for (const [sourceEdgeId, edge] of sourceBody.edges) {
+      const mappedVertexIds: [string, string] = [
+        vertexIdMap.get(edge.vertexIds[0]) ?? edge.vertexIds[0],
+        vertexIdMap.get(edge.vertexIds[1]) ?? edge.vertexIds[1],
+      ];
+      const key = getEdgeKey(mappedVertexIds);
+      const existing = mergedEdges.get(key);
+      if (existing) {
+        edgeIdMap.set(sourceEdgeId, existing.id);
+        continue;
+      }
+
+      const nextEdgeId = allocator.edge(key);
+      mergedEdges.set(key, { id: nextEdgeId, vertexIds: mappedVertexIds });
+      edgeIdMap.set(sourceEdgeId, nextEdgeId);
+    }
+
+    for (const [, face] of sourceBody.faces) {
+      const plane = sourceBody.planes.get(face.planeId);
+      if (!plane) {
+        continue;
+      }
+
+      const boundaryEdgeIds = face.boundaryEdgeIds.map((edgeId) => edgeIdMap.get(edgeId) ?? edgeId);
+      const faceVertexKeys = new Set<string>();
+      for (const boundaryEdgeId of boundaryEdgeIds) {
+        const edgeRecord = Array.from(mergedEdges.values()).find((edge) => edge.id === boundaryEdgeId);
+        if (!edgeRecord) {
+          continue;
+        }
+        for (const vertexId of edgeRecord.vertexIds) {
+          const mergedVertex = Array.from(mergedVertices.values()).find((vertex) => vertex.id === vertexId);
+          if (mergedVertex) {
+            faceVertexKeys.add(getPointKey(mergedVertex.position));
+          }
+        }
+      }
+
+      faceDrafts.push({
+        name: face.name,
+        plane: {
+          origin: [...plane.origin] as [number, number, number],
+          normal: [...plane.normal] as [number, number, number],
+          uAxis: [...plane.uAxis] as [number, number, number],
+          vAxis: [...plane.vAxis] as [number, number, number],
+        },
+        planeSignature: getCanonicalPlaneSignature(plane),
+        signature: `${getCanonicalPlaneSignature(plane)}|${Array.from(faceVertexKeys).sort().join('|')}`,
+        normal: [...plane.normal] as [number, number, number],
+        boundaryEdgeIds,
+      });
+    }
   }
 
-  // Add faces with remapped edge IDs
-  for (const [oldId, face] of body.faces) {
-    const newFaceId = generateId();
-    const newBoundaryEdgeIds = face.boundaryEdgeIds.map(eid => edgeIdMap.get(eid) ?? eid);
+  const droppedFaceIndexes = new Set<number>();
+  const signatureToFaceIndexes = new Map<string, number[]>();
+  faceDrafts.forEach((draft, index) => {
+    const existing = signatureToFaceIndexes.get(draft.signature) ?? [];
+    signatureToFaceIndexes.set(draft.signature, [...existing, index]);
+  });
 
-    const newFace = createFace(face.planeId, newBoundaryEdgeIds, newFaceId, face.name);
-    addFace(transformedBody, newFace);
+  for (const indexes of signatureToFaceIndexes.values()) {
+    if (indexes.length < 2) {
+      continue;
+    }
+
+    for (let i = 0; i < indexes.length; i++) {
+      const leftIndex = indexes[i]!;
+      const left = faceDrafts[leftIndex]!;
+      for (let j = i + 1; j < indexes.length; j++) {
+        const rightIndex = indexes[j]!;
+        const right = faceDrafts[rightIndex]!;
+        if (dotProduct(left.normal, right.normal) < -0.999) {
+          droppedFaceIndexes.add(leftIndex);
+          droppedFaceIndexes.add(rightIndex);
+        }
+      }
+    }
   }
 
-  // Transform planes
-  for (const [planeId, plane] of body.planes) {
-    const newOrigin = transformPoint(plane.origin, matrix);
-    const newNormal = transformDirection(plane.normal, matrix);
-    const newUAxis = transformDirection(plane.uAxis, matrix);
-    const newVAxis = transformDirection(plane.vAxis, matrix);
+  const combinedBody = createBody(
+    combinedBodyId,
+    name ?? `${bodies[0]!.name} Join`
+  );
 
-    const newPlane: Plane = {
-      origin: newOrigin,
-      normal: newNormal,
-      uAxis: newUAxis,
-      vAxis: newVAxis,
-    };
-
-    addPlane(transformedBody, newPlane, planeId);
+  for (const vertex of mergedVertices.values()) {
+    addVertex(
+      combinedBody,
+      createVertex([...vertex.position] as [number, number, number], vertex.id)
+    );
   }
 
-  return transformedBody;
+  const keptFaces = faceDrafts.filter((_, index) => !droppedFaceIndexes.has(index));
+  const usedEdgeIds = new Set<string>(keptFaces.flatMap((face) => face.boundaryEdgeIds));
+  const keepAllEdges = keptFaces.length === 0;
+  for (const edge of mergedEdges.values()) {
+    if (!keepAllEdges && !usedEdgeIds.has(edge.id)) {
+      continue;
+    }
+    addEdge(
+      combinedBody,
+      createEdge(edge.vertexIds[0], edge.vertexIds[1], edge.id)
+    );
+  }
+
+  const planeIdBySignature = new Map<string, string>();
+  for (const face of keptFaces) {
+    let planeId = planeIdBySignature.get(face.planeSignature);
+    if (!planeId) {
+      planeId = allocator.plane(face.planeSignature);
+      planeIdBySignature.set(face.planeSignature, planeId);
+      addPlane(combinedBody, face.plane, planeId);
+    }
+
+    addFace(
+      combinedBody,
+      createFace(planeId, face.boundaryEdgeIds, allocator.face(`${face.signature}:${keptFaces.indexOf(face)}`), face.name)
+    );
+  }
+
+  return combinedBody;
+}
+
+function getPointKey(point: [number, number, number]): string {
+  return point.map((value) => value.toFixed(6)).join(',');
+}
+
+function getEdgeKey(vertexIds: [string, string]): string {
+  return [...vertexIds].sort().join('|');
+}
+
+function getCanonicalPlaneSignature(plane: Plane): string {
+  const normal = new THREE.Vector3(...plane.normal).normalize();
+  const origin = new THREE.Vector3(...plane.origin);
+
+  if (
+    normal.x < -JOIN_TOLERANCE ||
+    (Math.abs(normal.x) <= JOIN_TOLERANCE && normal.y < -JOIN_TOLERANCE) ||
+    (Math.abs(normal.x) <= JOIN_TOLERANCE && Math.abs(normal.y) <= JOIN_TOLERANCE && normal.z < -JOIN_TOLERANCE)
+  ) {
+    normal.negate();
+  }
+
+  const distance = normal.dot(origin);
+  return [
+    normal.x.toFixed(6),
+    normal.y.toFixed(6),
+    normal.z.toFixed(6),
+    distance.toFixed(6),
+  ].join('|');
+}
+
+function dotProduct(
+  left: [number, number, number],
+  right: [number, number, number]
+): number {
+  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
 }
 
 /**
  * Compose (multiply) two 4x4 transformation matrices.
- * Result is matrix A * matrix B (A applied after B).
- *
- * @param a - First matrix (4x4 column-major flat array)
- * @param b - Second matrix (4x4 column-major flat array)
- * @returns Composed matrix (4x4 column-major flat array)
  */
 export function composeTransforms(a: number[], b: number[]): number[] {
   const matrixA = new THREE.Matrix4().fromArray(a);
@@ -348,13 +394,10 @@ export function composeTransforms(a: number[], b: number[]): number[] {
 
 /**
  * Decompose a 4x4 transformation matrix into translation, rotation, and scale.
- *
- * @param matrix - 4x4 column-major flat array
- * @returns Object with translation, rotation (euler angles), and scale
  */
 export function decomposeTransform(matrix: number[]): {
   translation: [number, number, number];
-  rotation: [number, number, number];  // Euler angles in radians
+  rotation: [number, number, number];
   scale: [number, number, number];
 } {
   const m = new THREE.Matrix4().fromArray(matrix);
@@ -375,11 +418,6 @@ export function decomposeTransform(matrix: number[]): {
 
 /**
  * Create a 4x4 transformation matrix from translation, rotation, and scale.
- *
- * @param translation - [x, y, z] translation
- * @param rotation - [x, y, z] euler angles in radians (optional)
- * @param scale - [x, y, z] scale (optional)
- * @returns 4x4 column-major flat array
  */
 export function createTransform(
   translation: [number, number, number],
@@ -405,9 +443,6 @@ export function createTransform(
 
 /**
  * Invert a 4x4 transformation matrix.
- *
- * @param matrix - 4x4 column-major flat array
- * @returns Inverted matrix
  */
 export function invertTransform(matrix: number[]): number[] {
   const m = new THREE.Matrix4().fromArray(matrix);

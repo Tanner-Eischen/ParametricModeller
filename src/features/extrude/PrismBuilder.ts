@@ -16,6 +16,8 @@ export interface PrismParams {
   profile: Profile2D;
   /** Extrusion distance */
   distance: number;
+  /** Signed offset of the first cap along the resolved extrusion direction. */
+  startOffset?: number;
   /** Whether to flip extrusion direction (opposite to plane normal) */
   flip: boolean;
 }
@@ -32,7 +34,7 @@ const PRISM_FACE_IDS = {
  * Build a prism body from a profile.
  */
 export function buildPrism(params: PrismParams, bodyId?: string): Body {
-  const { plane, profile, distance, flip } = params;
+  const { plane, profile, distance, flip, startOffset = 0 } = params;
 
   // Determine extrusion direction
   const extrudeDir: [number, number, number] = flip
@@ -47,13 +49,20 @@ export function buildPrism(params: PrismParams, bodyId?: string): Body {
   const topPoints2D = bottomPoints2D; // Same 2D points, different Z
 
   // Transform to 3D
-  const bottomPoints3D = bottomPoints2D.map((p) => sketchToWorld(plane, p));
+  const bottomPoints3D = bottomPoints2D.map((p) => {
+    const point = sketchToWorld(plane, p);
+    return [
+      point[0] + startOffset * extrudeDir[0],
+      point[1] + startOffset * extrudeDir[1],
+      point[2] + startOffset * extrudeDir[2],
+    ] as [number, number, number];
+  });
   const topPoints3D = topPoints2D.map((p) => {
     const bottom = sketchToWorld(plane, p);
     return [
-      bottom[0] + distance * extrudeDir[0],
-      bottom[1] + distance * extrudeDir[1],
-      bottom[2] + distance * extrudeDir[2],
+      bottom[0] + (startOffset + distance) * extrudeDir[0],
+      bottom[1] + (startOffset + distance) * extrudeDir[1],
+      bottom[2] + (startOffset + distance) * extrudeDir[2],
     ] as [number, number, number];
   });
 
@@ -81,8 +90,12 @@ export function buildPrism(params: PrismParams, bodyId?: string): Body {
 
   // Create bottom cap plane (opposite normal to sketch plane)
   const bottomPlane: Plane = {
-    origin: plane.origin,
-    normal: [-plane.normal[0], -plane.normal[1], -plane.normal[2]] as [number, number, number],
+    origin: [
+      plane.origin[0] + startOffset * extrudeDir[0],
+      plane.origin[1] + startOffset * extrudeDir[1],
+      plane.origin[2] + startOffset * extrudeDir[2],
+    ],
+    normal: [-extrudeDir[0], -extrudeDir[1], -extrudeDir[2]],
     uAxis: plane.uAxis,
     vAxis: plane.vAxis,
   };
@@ -90,9 +103,9 @@ export function buildPrism(params: PrismParams, bodyId?: string): Body {
 
   // Create top cap plane
   const topOrigin: [number, number, number] = [
-    plane.origin[0] + distance * extrudeDir[0],
-    plane.origin[1] + distance * extrudeDir[1],
-    plane.origin[2] + distance * extrudeDir[2],
+    plane.origin[0] + (startOffset + distance) * extrudeDir[0],
+    plane.origin[1] + (startOffset + distance) * extrudeDir[1],
+    plane.origin[2] + (startOffset + distance) * extrudeDir[2],
   ];
   const topPlane: Plane = {
     origin: topOrigin,
@@ -118,7 +131,7 @@ export function buildPrism(params: PrismParams, bodyId?: string): Body {
       p2Bottom[1] - p1Bottom[1],
       p2Bottom[2] - p1Bottom[2],
     ];
-    const sideNormal = crossProduct(extrudeDir, edgeDir);
+    const sideNormal = crossProduct(edgeDir, extrudeDir);
     const sidePlane = createPlane(p1Bottom, sideNormal);
     addPlane(body, sidePlane, sidePlaneId);
   }

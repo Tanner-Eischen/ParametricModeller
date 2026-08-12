@@ -18,19 +18,45 @@ export interface DiagnosticsPanelOptions {
 export class DiagnosticsPanel {
   private container: HTMLElement;
   private contentElement: HTMLElement;
+  private announcementElement: HTMLSpanElement;
   private diagnostics: Diagnostic[] = [];
+  private lastAnnouncement = '';
 
   constructor(options: DiagnosticsPanelOptions) {
     this.container = options.container;
     this.contentElement = this.createContentElement();
+    this.announcementElement = this.createAnnouncementElement();
     this.container.appendChild(this.contentElement);
+    this.container.appendChild(this.announcementElement);
     this.setupEventListeners();
     log.debug('DiagnosticsPanel initialized');
+  }
+
+  private createAnnouncementElement(): HTMLSpanElement {
+    const announcement = document.createElement('span');
+    announcement.setAttribute('role', 'status');
+    announcement.setAttribute('aria-live', 'polite');
+    announcement.setAttribute('aria-atomic', 'true');
+    announcement.setAttribute('aria-label', 'Diagnostics summary');
+    announcement.style.cssText = [
+      'position:absolute',
+      'width:1px',
+      'height:1px',
+      'padding:0',
+      'margin:-1px',
+      'overflow:hidden',
+      'clip:rect(0,0,0,0)',
+      'white-space:nowrap',
+      'border:0',
+    ].join(';');
+    return announcement;
   }
 
   private createContentElement(): HTMLElement {
     const content = document.createElement('div');
     content.className = 'diagnostics-panel';
+    content.setAttribute('role', 'region');
+    content.setAttribute('aria-label', 'Model diagnostics');
     content.style.cssText = `
       display: flex;
       flex-direction: column;
@@ -58,6 +84,7 @@ export class DiagnosticsPanel {
   setDiagnostics(diagnostics: Diagnostic[]): void {
     this.diagnostics = diagnostics;
     this.render();
+    this.announceSummary();
     log.debug('Diagnostics updated', { count: diagnostics.length });
   }
 
@@ -67,6 +94,18 @@ export class DiagnosticsPanel {
   clear(): void {
     this.diagnostics = [];
     this.render();
+    this.announceSummary();
+  }
+
+  private announceSummary(): void {
+    const errors = this.errorCount;
+    const warnings = this.warningCount;
+    const summary = errors === 0 && warnings === 0
+      ? 'Model diagnostics clear'
+      : `Model diagnostics: ${errors} error${errors === 1 ? '' : 's'}, ${warnings} warning${warnings === 1 ? '' : 's'}`;
+    if (summary === this.lastAnnouncement) return;
+    this.lastAnnouncement = summary;
+    this.announcementElement.textContent = summary;
   }
 
   /**
@@ -153,14 +192,27 @@ export class DiagnosticsPanel {
    * Render a single diagnostic.
    */
   private renderDiagnostic(d: Diagnostic): HTMLElement {
-    const item = document.createElement('div');
+    const isActionable = d.featureId !== undefined;
+    const item = document.createElement(isActionable ? 'button' : 'div');
+    if (item instanceof HTMLButtonElement) {
+      item.type = 'button';
+      item.setAttribute('aria-label', `${formatDiagnostic(d)}. Select affected feature.`);
+    }
     item.style.cssText = `
+      display: block;
+      width: 100%;
+      margin: 0;
       padding: 6px 8px;
       border-radius: 4px;
       background: ${d.severity === 'error' ? '#3a1a1a' : '#3a3a1a'};
+      border-top: none;
+      border-right: none;
+      border-bottom: none;
       border-left: 3px solid ${d.severity === 'error' ? '#ff6b6b' : '#feca57'};
       font-size: 11px;
-      cursor: pointer;
+      font-family: inherit;
+      text-align: left;
+      cursor: ${isActionable ? 'pointer' : 'default'};
     `;
 
     // Click to select the feature

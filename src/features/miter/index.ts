@@ -1,0 +1,16 @@
+export {
+  MITER_CUT_FEATURE_TYPE,
+  defaultMiterCutParams,
+  validateMiterCutParams,
+  createMiterCutFeature,
+  rebuildMiterCut,
+  resolveMiterCutPlane,
+  resolveThreeWayMiterPlanes,
+  resolveThreeWayMiterCornerVertexId,
+  validateThreeWayMiterEndFace,
+  type MiterCutParams,
+  type MiterCutResultMode,
+  type MiterCutTiltAxis,
+  type MiterCutStyle,
+  type ThreeWayMiterCorner,
+} from './MiterCutFeature';

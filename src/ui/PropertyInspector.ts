@@ -1,17 +1,49 @@
 import { createModuleLogger } from '../core/logger';
 import { eventBus } from '../core';
 import type { FeatureRecord, Diagnostic } from '../features';
+import {
+  migrateSketchParams,
+  type NormalizedSketchParams,
+} from '../features/sketch/SketchFeature';
 import type { BoxParams } from '../features/primitives';
-import type { SketchParams, ExtrudeParams, ExtrudeCutParams, LinearPatternParams, MirrorParams, DuplicateParams } from '../features';
+import type {
+  SketchParams,
+  ExtrudeParams,
+  ExtrudeCutParams,
+  LinearPatternParams,
+  MirrorParams,
+  DuplicateParams,
+  MoveCopyParams,
+  RotateBodyParams,
+  JoinBodiesParams,
+  MiterCutParams,
+  WoodJointParams,
+  TransformBodiesParams,
+} from '../features';
 import type { MoveVertexParams } from '../features/vertex';
+import {
+  extractProfiles,
+  solveSketchConstraints,
+  type PlaneRef,
+  type SketchEntity,
+  type RectangleEntity,
+  type LineEntity,
+} from '../sketch';
+import { parseNumericInput, resolveNumericInput } from '../interaction/NumericInput';
 
 const log = createModuleLogger('PropertyInspector');
+let propertyFieldId = 0;
 
 /**
  * Options for the PropertyInspector.
  */
 export interface PropertyInspectorOptions {
   container: HTMLElement;
+  units?: 'inch' | 'mm';
+}
+
+interface NumberInputOptions {
+  useDocumentUnits?: boolean;
 }
 
 /**
@@ -21,15 +53,39 @@ export class PropertyInspector {
   private container: HTMLElement;
   private contentElement: HTMLElement;
   private currentFeature: FeatureRecord | null = null;
+  private knownFeatures: FeatureRecord[] = [];
   private diagnostics: Diagnostic[] = [];
   private isDirty = false;
+  private documentUnits: 'inch' | 'mm';
+  private quickBoxDraft: BoxParams = {
+    width: 4,
+    depth: 4,
+    height: 8,
+    anchorMode: 'corner',
+    origin: [0, 0, 0],
+  };
 
   constructor(options: PropertyInspectorOptions) {
     this.container = options.container;
+    this.documentUnits = options.units ?? 'inch';
     this.contentElement = this.createContentElement();
     this.container.appendChild(this.contentElement);
     this.setupEventListeners();
+    this.renderEmpty();
     log.debug('PropertyInspector initialized');
+  }
+
+  setUnitContext(units: 'inch' | 'mm'): void {
+    if (this.documentUnits === units) return;
+    this.documentUnits = units;
+    this.render();
+  }
+
+  /** Flush pending field edits before a parent ToolSession commits. */
+  applyPendingChanges(): boolean {
+    if (!this.currentFeature || !this.isDirty) return false;
+    this.applyChanges();
+    return true;
   }
 
   private createContentElement(): HTMLElement {
@@ -51,8 +107,19 @@ export class PropertyInspector {
       this.setFeature(feature as unknown as FeatureRecord);
     });
 
+    eventBus.on('ui:property-inspector:clear', () => {
+      this.clear();
+    });
+
     eventBus.on('feature:diagnostics', ({ diagnostics }) => {
       this.setDiagnostics(diagnostics as Diagnostic[]);
+    });
+
+    eventBus.on('document:loaded', ({ features }) => {
+      this.knownFeatures = features as unknown as FeatureRecord[];
+      if (!this.currentFeature) {
+        this.renderEmpty();
+      }
     });
   }
 
@@ -119,10 +186,100 @@ export class PropertyInspector {
    */
   private renderEmpty(): void {
     this.contentElement.innerHTML = '';
+
+    if (this.knownFeatures.length === 0) {
+      this.contentElement.appendChild(this.renderQuickBoxEmptyState());
+      return;
+    }
+
     const empty = document.createElement('div');
     empty.textContent = 'Select a feature to edit';
     empty.style.cssText = 'color: #666; padding: 16px; text-align: center;';
     this.contentElement.appendChild(empty);
+  }
+
+  private renderQuickBoxEmptyState(): HTMLElement {
+    const card = document.createElement('div');
+    card.style.cssText = `
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 12px;
+      border: 1px solid #333;
+      border-radius: 8px;
+      background: #1f1f1f;
+    `;
+
+    const title = document.createElement('div');
+    title.textContent = 'Create a box';
+    title.style.cssText = 'font-size: 15px; font-weight: 700; color: #fff;';
+    card.appendChild(title);
+
+    const description = document.createElement('p');
+    description.textContent =
+      'Enter width, depth, and height, then create your first prism. Keep width and depth equal for a square prism.';
+    description.style.cssText = 'margin: 0; font-size: 12px; line-height: 1.5; color: #b7b7b7;';
+    card.appendChild(description);
+
+    card.appendChild(
+      this.createNumberInput('Width (X)', this.quickBoxDraft.width, (value) => {
+        this.quickBoxDraft = { ...this.quickBoxDraft, width: value };
+      })
+    );
+    card.appendChild(
+      this.createNumberInput('Depth (Y)', this.quickBoxDraft.depth, (value) => {
+        this.quickBoxDraft = { ...this.quickBoxDraft, depth: value };
+      })
+    );
+    card.appendChild(
+      this.createNumberInput('Height (Z)', this.quickBoxDraft.height, (value) => {
+        this.quickBoxDraft = { ...this.quickBoxDraft, height: value };
+      })
+    );
+
+    const helper = document.createElement('div');
+    helper.textContent = 'You can fine-tune the dimensions immediately after creation.';
+    helper.style.cssText = 'font-size: 11px; color: #888;';
+    card.appendChild(helper);
+
+    const createButton = document.createElement('button');
+    createButton.type = 'button';
+    createButton.textContent = 'Create box';
+    createButton.style.cssText = `
+      padding: 10px 12px;
+      border: none;
+      border-radius: 6px;
+      background: #1a5fb4;
+      color: #fff;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    `;
+    createButton.addEventListener('click', () => {
+      if (
+        this.quickBoxDraft.width <= 0 ||
+        this.quickBoxDraft.depth <= 0 ||
+        this.quickBoxDraft.height <= 0
+      ) {
+        eventBus.emit('ui:status', {
+          message: 'Width, depth, and height must be greater than 0',
+        });
+        return;
+      }
+
+      eventBus.emit('feature:create-box', {
+        parameters: {
+          width: this.quickBoxDraft.width,
+          depth: this.quickBoxDraft.depth,
+          height: this.quickBoxDraft.height,
+          anchorMode: this.quickBoxDraft.anchorMode,
+          origin: [...this.quickBoxDraft.origin] as [number, number, number],
+        },
+      });
+    });
+    card.appendChild(createButton);
+
+    return card;
   }
 
   /**
@@ -174,6 +331,10 @@ export class PropertyInspector {
       return this.renderExtrudeCutParameters(container);
     }
 
+    if (this.currentFeature.type === 'miterCut') {
+      return this.renderMiterCutParameters(container);
+    }
+
     if (this.currentFeature.type === 'linearPattern') {
       return this.renderLinearPatternParameters(container);
     }
@@ -194,12 +355,31 @@ export class PropertyInspector {
       return this.renderDuplicateParameters(container);
     }
 
-    // Generic parameter display for unknown types
-    const params = this.currentFeature.parameters;
-    for (const [key, value] of Object.entries(params)) {
-      const row = this.createParamRow(key, String(value), () => {});
-      container.appendChild(row);
+    if (this.currentFeature.type === 'moveCopy') {
+      return this.renderMoveCopyParameters(container);
     }
+
+    if (this.currentFeature.type === 'transformBodies') {
+      return this.renderTransformBodiesParameters(container);
+    }
+
+    if (this.currentFeature.type === 'rotateBody') {
+      return this.renderRotateBodyParameters(container);
+    }
+
+    if (this.currentFeature.type === 'joinBodies') {
+      return this.renderJoinBodiesParameters(container);
+    }
+
+    if (this.currentFeature.type === 'woodJoint') {
+      return this.renderWoodJointParameters(container);
+    }
+
+    const message = document.createElement('p');
+    message.className = 'property-inspector__empty-editor';
+    message.textContent = 'This feature has no editable controls yet.';
+    container.appendChild(message);
+    container.appendChild(this.createTechnicalDetailsDisclosure(this.currentFeature.parameters));
 
     return container;
   }
@@ -252,9 +432,9 @@ export class PropertyInspector {
     );
 
     // Anchor mode
-    container.appendChild(this.createSectionLabel('Anchor'));
     container.appendChild(
       this.createSelectInput(
+        'Anchor',
         ['corner', 'center'],
         params.anchorMode ?? 'corner',
         (val) => {
@@ -272,56 +452,106 @@ export class PropertyInspector {
   private renderSketchParameters(container: HTMLElement): HTMLElement {
     if (!this.currentFeature) return container;
 
-    const params = this.currentFeature.parameters as unknown as SketchParams;
+    const params = migrateSketchParams(
+      this.currentFeature.parameters as unknown as SketchParams
+    );
+    const planeRef = params.planeRef;
+    const rectangleCount = params.entities.filter((entity) => entity.type === 'rectangle').length;
+    const lineCount = params.entities.filter((entity) => entity.type === 'line').length;
+    const otherCount = Math.max(0, params.entities.length - rectangleCount - lineCount);
+    const profileCount = extractProfiles({
+      id: this.currentFeature.id,
+      name: this.currentFeature.name,
+      planeRef: params.planeRef,
+      entities: params.entities,
+      dimensions: params.dimensions,
+    }).length;
 
-    // Plane reference info
-    container.appendChild(this.createSectionLabel('Plane Reference'));
-    const planeInfo = document.createElement('div');
-    planeInfo.style.cssText = 'font-size: 12px; color: #aaa; margin-bottom: 8px;';
-    if (params.planeRef.type === 'world') {
-      planeInfo.textContent = `World Plane: ${params.planeRef.worldPlane?.toUpperCase() ?? 'XY'} (offset: ${params.planeRef.offset ?? 0})`;
+    container.appendChild(this.createSectionLabel('Sketch Plane'));
+    if (planeRef.type === 'world') {
+      container.appendChild(
+        this.createMappedSelectInput(
+          'World Plane',
+          [
+            { value: 'xy', label: 'XY' },
+            { value: 'xz', label: 'XZ' },
+            { value: 'yz', label: 'YZ' },
+          ],
+          planeRef.worldPlane ?? 'xy',
+          (value) => this.updateSketchPlaneRef({ worldPlane: value })
+        )
+      );
+      container.appendChild(
+        this.createNumberInput('Plane Offset', planeRef.offset ?? 0, (value) => {
+          this.updateSketchPlaneRef({ offset: value });
+        })
+      );
+
+      const planeHint = document.createElement('div');
+      planeHint.style.cssText = 'font-size: 11px; color: #888; margin-top: -4px;';
+      planeHint.textContent = 'World-plane sketches can be reassigned without leaving the feature.';
+      container.appendChild(planeHint);
     } else {
-      planeInfo.textContent = `Face: ${params.planeRef.faceId ?? 'unknown'} (body: ${params.planeRef.bodyId ?? 'unknown'})`;
-    }
-    container.appendChild(planeInfo);
+      container.appendChild(
+        this.createReadOnlyDetail('Source Face', planeRef.faceId ?? 'unknown')
+      );
+      container.appendChild(
+        this.createReadOnlyDetail('Source Body', planeRef.bodyId ?? 'unknown')
+      );
 
-    // Entities count
+      const planeInfo = document.createElement('div');
+      planeInfo.style.cssText = 'font-size: 11px; color: #888; margin-top: -4px;';
+      planeInfo.textContent = 'Face-based sketch planes are read-only in the inspector.';
+      container.appendChild(planeInfo);
+    }
+
     container.appendChild(this.createSectionLabel('Entities'));
     const entitiesInfo = document.createElement('div');
     entitiesInfo.style.cssText = 'font-size: 12px; color: #aaa;';
-    const rectCount = params.entities.filter(e => e.type === 'rectangle').length;
-    entitiesInfo.textContent = `${params.entities.length} entities (${rectCount} rectangles)`;
+    const summaryParts = [
+      `${params.entities.length} total`,
+      `${rectangleCount} rectangle${rectangleCount === 1 ? '' : 's'}`,
+      `${lineCount} line${lineCount === 1 ? '' : 's'}`,
+      `${profileCount} closed profile${profileCount === 1 ? '' : 's'}`,
+    ];
+    if (otherCount > 0) {
+      summaryParts.push(`${otherCount} other`);
+    }
+    entitiesInfo.textContent = summaryParts.join(' • ');
+    entitiesInfo.textContent = summaryParts.join(' • ');
+    entitiesInfo.textContent = summaryParts.join(' / ');
     container.appendChild(entitiesInfo);
 
-    // Show rectangle details if present
-    for (const entity of params.entities) {
-      if (entity.type === 'rectangle') {
-        const rectDiv = document.createElement('div');
-        rectDiv.style.cssText = 'margin-top: 8px; padding: 8px; background: #2a2a2a; border-radius: 4px;';
-        rectDiv.innerHTML = `
-          <div style="font-size: 11px; color: #888;">Rectangle: ${entity.id}</div>
-          <div style="font-size: 12px; margin-top: 4px;">
-            ${entity.width.toFixed(2)} x ${entity.height.toFixed(2)}
-          </div>
-        `;
-        container.appendChild(rectDiv);
+    if (params.entities.length === 0) {
+      const emptyState = document.createElement('div');
+      emptyState.style.cssText = 'font-size: 12px; color: #888; padding: 8px 0;';
+      emptyState.textContent = 'No sketch entities yet.';
+      container.appendChild(emptyState);
+    } else {
+      params.entities.forEach((entity, index) => {
+        container.appendChild(this.createSketchEntityCard(entity, index + 1));
+      });
+    }
+
+    if (params.drivingDimensions.length > 0) {
+      container.appendChild(this.createSectionLabel('Dimensions'));
+      for (const dimension of params.drivingDimensions) {
+        container.appendChild(
+          this.createNumberInput(
+            dimension.name ?? 'Distance',
+            dimension.value,
+            (value) => this.updateSketchDrivingDimension(params, dimension.id, value),
+            { useDocumentUnits: true }
+          )
+        );
       }
     }
 
-    // Dimensions
-    if (params.dimensions.length > 0) {
-      container.appendChild(this.createSectionLabel('Dimensions'));
-      for (const dim of params.dimensions) {
-        container.appendChild(
-          this.createNumberInput(`${dim.type}`, dim.value, (val) => {
-            // Update dimension value
-            const newDimensions = params.dimensions.map(d =>
-              d.id === dim.id ? { ...d, value: val } : d
-            );
-            this.updateParameter('dimensions', newDimensions);
-          })
-        );
-      }
+    if (params.dimensions.some((dimension) => dimension.type === 'angle')) {
+      container.appendChild(this.createReadOnlyDetail(
+        'Angular dimensions',
+        'Not editable in this version'
+      ));
     }
 
     return container;
@@ -349,12 +579,68 @@ export class PropertyInspector {
       })
     );
 
-    // Distance
+    const extent = {
+      direction: params.extent?.direction ?? 'OneSided',
+      limit: params.extent?.limit ?? 'Distance',
+      ...(params.extent?.distance !== undefined || params.distance !== undefined
+        ? { distance: params.extent?.distance ?? params.distance }
+        : {}),
+      ...(params.extent?.upToFaceRef ? { upToFaceRef: params.extent.upToFaceRef } : {}),
+    };
+
+    container.appendChild(this.createSectionLabel('Operation'));
     container.appendChild(
-      this.createNumberInput('Distance', params.distance ?? 1, (val) => {
-        this.updateParameter('distance', val);
-      })
+      this.createMappedSelectInput(
+        'Result',
+        [
+          { value: 'New', label: 'New Body' },
+          { value: 'Add', label: 'Add / Union' },
+          { value: 'Cut', label: 'Cut / Difference' },
+        ],
+        params.operation ?? 'New',
+        (operation) => this.updateParameter('operation', operation)
+      )
     );
+
+    container.appendChild(this.createSectionLabel('Extent'));
+    container.appendChild(
+      this.createMappedSelectInput(
+        'Direction',
+        [
+          { value: 'OneSided', label: 'One Sided' },
+          { value: 'Symmetric', label: 'Symmetric' },
+        ],
+        extent.direction,
+        (direction) => this.updateExtrudeExtent({ direction })
+      )
+    );
+    container.appendChild(
+      this.createMappedSelectInput(
+        'Limit',
+        [
+          { value: 'Distance', label: 'Distance' },
+          { value: 'UpToFace', label: 'Up to Face' },
+          { value: 'ThroughAll', label: 'Through All' },
+        ],
+        extent.limit,
+        (limit) => this.updateExtrudeExtent({ limit })
+      )
+    );
+    if (extent.limit === 'Distance') {
+      container.appendChild(
+        this.createNumberInput('Distance', extent.distance ?? params.distance ?? 1, (val) => {
+          this.updateParameters({
+            distance: val,
+            extent: { ...extent, distance: val },
+          });
+        })
+      );
+    } else if (extent.limit === 'UpToFace') {
+      container.appendChild(this.createReadOnlyDetail(
+        'Face',
+        extent.upToFaceRef?.faceId ?? 'Select a parallel face before applying'
+      ));
+    }
 
     // Flip direction
     container.appendChild(this.createSectionLabel('Direction'));
@@ -369,20 +655,15 @@ export class PropertyInspector {
       this.updateParameter('flip', flipCheckbox.checked);
     });
 
-    const flipLabel = document.createElement('span');
+    const flipLabel = document.createElement('label');
     flipLabel.textContent = 'Flip Direction';
     flipLabel.style.cssText = 'font-size: 12px;';
+    flipCheckbox.id = this.createFieldId('flip-direction');
+    flipLabel.htmlFor = flipCheckbox.id;
 
     flipContainer.appendChild(flipCheckbox);
     flipContainer.appendChild(flipLabel);
     container.appendChild(flipContainer);
-
-    // Mode
-    container.appendChild(this.createSectionLabel('Mode'));
-    const modeInfo = document.createElement('div');
-    modeInfo.style.cssText = 'font-size: 12px; color: #aaa;';
-    modeInfo.textContent = params.mode ?? 'newBody';
-    container.appendChild(modeInfo);
 
     return container;
   }
@@ -416,56 +697,54 @@ export class PropertyInspector {
       })
     );
 
-    // Mode selector
-    container.appendChild(this.createSectionLabel('Cut Mode'));
-    const modeContainer = document.createElement('div');
-    modeContainer.style.cssText = 'display: flex; gap: 8px; margin-bottom: 8px;';
+    const extent = {
+      direction: params.extent?.direction ?? 'OneSided',
+      limit: params.extent?.limit ?? (params.mode === 'through' ? 'ThroughAll' : 'Distance'),
+      ...(params.extent?.distance !== undefined || params.distance !== undefined
+        ? { distance: params.extent?.distance ?? params.distance }
+        : {}),
+      ...(params.extent?.upToFaceRef ? { upToFaceRef: params.extent.upToFaceRef } : {}),
+    };
+    container.appendChild(this.createSectionLabel('Extent'));
+    container.appendChild(
+      this.createMappedSelectInput(
+        'Direction',
+        [
+          { value: 'OneSided', label: 'One Sided' },
+          { value: 'Symmetric', label: 'Symmetric' },
+        ],
+        extent.direction,
+        (direction) => this.updateExtrudeExtent({ direction })
+      )
+    );
+    container.appendChild(
+      this.createMappedSelectInput(
+        'Limit',
+        [
+          { value: 'Distance', label: 'Distance' },
+          { value: 'UpToFace', label: 'Up to Face' },
+          { value: 'ThroughAll', label: 'Through All' },
+        ],
+        extent.limit,
+        (limit) => this.updateExtrudeExtent({ limit }, true)
+      )
+    );
 
-    const distanceRadio = document.createElement('input');
-    distanceRadio.type = 'radio';
-    distanceRadio.name = 'cutMode';
-    distanceRadio.value = 'distance';
-    distanceRadio.checked = params.mode !== 'through';
-    distanceRadio.style.cssText = 'width: 16px; height: 16px;';
-    distanceRadio.addEventListener('change', () => {
-      if (distanceRadio.checked) {
-        this.updateParameter('mode', 'distance');
-      }
-    });
-
-    const distanceLabel = document.createElement('span');
-    distanceLabel.textContent = 'Distance';
-    distanceLabel.style.cssText = 'font-size: 12px; margin-right: 16px;';
-
-    const throughRadio = document.createElement('input');
-    throughRadio.type = 'radio';
-    throughRadio.name = 'cutMode';
-    throughRadio.value = 'through';
-    throughRadio.checked = params.mode === 'through';
-    throughRadio.style.cssText = 'width: 16px; height: 16px;';
-    throughRadio.addEventListener('change', () => {
-      if (throughRadio.checked) {
-        this.updateParameter('mode', 'through');
-      }
-    });
-
-    const throughLabel = document.createElement('span');
-    throughLabel.textContent = 'Through All';
-    throughLabel.style.cssText = 'font-size: 12px;';
-
-    modeContainer.appendChild(distanceRadio);
-    modeContainer.appendChild(distanceLabel);
-    modeContainer.appendChild(throughRadio);
-    modeContainer.appendChild(throughLabel);
-    container.appendChild(modeContainer);
-
-    // Distance (conditional on mode === 'distance')
-    if (params.mode !== 'through') {
+    if (extent.limit === 'Distance') {
       container.appendChild(
-        this.createNumberInput('Distance', params.distance ?? 0.5, (val) => {
-          this.updateParameter('distance', val);
+        this.createNumberInput('Distance', extent.distance ?? params.distance ?? 0.5, (val) => {
+          this.updateParameters({
+            mode: 'distance',
+            distance: val,
+            extent: { ...extent, distance: val },
+          });
         })
       );
+    } else if (extent.limit === 'UpToFace') {
+      container.appendChild(this.createReadOnlyDetail(
+        'Face',
+        extent.upToFaceRef?.faceId ?? 'Select a parallel face before applying'
+      ));
     }
 
     // Flip direction
@@ -481,9 +760,11 @@ export class PropertyInspector {
       this.updateParameter('flip', flipCheckbox.checked);
     });
 
-    const flipLabel = document.createElement('span');
+    const flipLabel = document.createElement('label');
     flipLabel.textContent = 'Flip Direction';
     flipLabel.style.cssText = 'font-size: 12px;';
+    flipCheckbox.id = this.createFieldId('flip-direction');
+    flipLabel.htmlFor = flipCheckbox.id;
 
     flipContainer.appendChild(flipCheckbox);
     flipContainer.appendChild(flipLabel);
@@ -553,14 +834,92 @@ export class PropertyInspector {
       this.updateParameter('symmetric', symmetricCheckbox.checked);
     });
 
-    const symmetricLabel = document.createElement('span');
+    const symmetricLabel = document.createElement('label');
     symmetricLabel.textContent = 'Symmetric';
     symmetricLabel.style.cssText = 'font-size: 12px;';
+    symmetricCheckbox.id = this.createFieldId('symmetric');
+    symmetricLabel.htmlFor = symmetricCheckbox.id;
 
     symmetricContainer.appendChild(symmetricCheckbox);
     symmetricContainer.appendChild(symmetricLabel);
     container.appendChild(symmetricContainer);
 
+    return container;
+  }
+
+  private renderMiterCutParameters(container: HTMLElement): HTMLElement {
+    if (!this.currentFeature) return container;
+    const params = this.currentFeature.parameters as unknown as MiterCutParams;
+    const cutStyle = params.cutStyle ?? 'single';
+
+    container.appendChild(this.createReadOnlyDetail('Body', params.sourceBodyRef?.bodyId ?? 'missing'));
+    container.appendChild(this.createReadOnlyDetail('Reference face', params.faceRef?.faceId ?? 'missing'));
+    container.appendChild(
+      this.createMappedSelectInput(
+        'Cut type',
+        [
+          { value: 'single', label: 'Single miter' },
+          { value: 'threeWay', label: 'Three-way end' },
+        ],
+        cutStyle,
+        (nextCutStyle) => {
+          this.updateParameter('cutStyle', nextCutStyle);
+          this.render();
+        }
+      )
+    );
+    container.appendChild(
+      this.createMappedSelectInput(
+        'Result',
+        [
+          {
+            value: 'split',
+            label: cutStyle === 'threeWay' ? 'Keep all pieces' : 'Keep both pieces',
+          },
+          { value: 'trim', label: 'Trim end' },
+        ],
+        params.resultMode ?? 'split',
+        (resultMode) => this.updateParameter('resultMode', resultMode)
+      )
+    );
+    if (cutStyle === 'threeWay') {
+      container.appendChild(
+        this.createMappedSelectInput(
+          'Joint corner',
+          [0, 1, 2, 3].map((index) => ({
+            value: `corner${index}`,
+            label: `Corner ${index + 1}`,
+          })),
+          params.threeWayCorner ?? 'corner0',
+          (corner) => this.updateParameter('threeWayCorner', corner)
+        )
+      );
+      container.appendChild(this.createReadOnlyDetail('Angles', '45\u00b0 + 45\u00b0'));
+    } else {
+      container.appendChild(
+        this.createNumberInput('Angle (deg)', params.angleDegrees ?? 45, (angleDegrees) => {
+          this.updateParameter('angleDegrees', angleDegrees);
+        })
+      );
+    }
+    container.appendChild(
+      this.createNumberInput('Inset', params.inset ?? 0, (inset) => {
+        this.updateParameter('inset', inset);
+      }, { useDocumentUnits: true })
+    );
+    if (cutStyle === 'single') {
+      container.appendChild(
+        this.createMappedSelectInput(
+          'Angle across',
+          [
+            { value: 'u', label: 'Face U' },
+            { value: 'v', label: 'Face V' },
+          ],
+          params.tiltAxis ?? 'u',
+          (tiltAxis) => this.updateParameter('tiltAxis', tiltAxis)
+        )
+      );
+    }
     return container;
   }
 
@@ -579,16 +938,36 @@ export class PropertyInspector {
     sourceInfo.textContent = `Feature ID: ${params.sourceFeatureId ?? 'none'}`;
     container.appendChild(sourceInfo);
 
-    // Mirror plane info (read-only for v1)
+    // World-plane mirrors remain fully editable during the preview session.
     container.appendChild(this.createSectionLabel('Mirror Plane'));
-    const planeInfo = document.createElement('div');
-    planeInfo.style.cssText = 'font-size: 12px; color: #aaa;';
     if (params.planeRef?.type === 'world') {
-      planeInfo.textContent = `World Plane: ${params.planeRef.worldPlane?.toUpperCase() ?? 'YZ'} (offset: ${params.planeRef.offset ?? 0})`;
+      container.appendChild(
+        this.createMappedSelectInput(
+          'Plane',
+          [
+            { value: 'xy', label: 'XY' },
+            { value: 'xz', label: 'XZ' },
+            { value: 'yz', label: 'YZ' },
+          ],
+          params.planeRef.worldPlane ?? 'yz',
+          (worldPlane) => this.updateParameter('planeRef', {
+            ...params.planeRef,
+            type: 'world',
+            worldPlane,
+          })
+        )
+      );
+      container.appendChild(
+        this.createNumberInput('Offset', params.planeRef.offset ?? 0, (offset) => {
+          this.updateParameter('planeRef', { ...params.planeRef, offset });
+        })
+      );
     } else {
-      planeInfo.textContent = `Face Plane: ${params.planeRef?.faceId ?? 'unknown'}`;
+      container.appendChild(this.createReadOnlyDetail(
+        'Face Plane',
+        params.planeRef?.faceId ?? 'unknown'
+      ));
     }
-    container.appendChild(planeInfo);
 
     return container;
   }
@@ -692,7 +1071,7 @@ export class PropertyInspector {
       });
 
       const label = document.createElement('span');
-      label.textContent = axisLabels[i];
+      label.textContent = axisLabels[i] ?? 'None';
       label.style.cssText = 'font-size: 12px; margin-right: 8px;';
 
       const wrapper = document.createElement('label');
@@ -744,6 +1123,286 @@ export class PropertyInspector {
     return container;
   }
 
+  private renderMoveCopyParameters(container: HTMLElement): HTMLElement {
+    if (!this.currentFeature) return container;
+    const params = this.currentFeature.parameters as unknown as MoveCopyParams;
+
+    container.appendChild(this.createSectionLabel('Source'));
+    container.appendChild(this.createReadOnlyDetail('Body', params.sourceBodyRef?.bodyId ?? 'none'));
+    container.appendChild(
+      this.createMappedSelectInput(
+        'Operation',
+        [
+          { value: 'move', label: 'Move' },
+          { value: 'copy', label: 'Copy' },
+        ],
+        params.mode ?? 'copy',
+        (mode) => this.updateParameter('mode', mode)
+      )
+    );
+
+    container.appendChild(this.createSectionLabel('Exact Displacement'));
+    const translation = params.translation ?? [0, 0, 0];
+    for (const [index, label] of ['X', 'Y', 'Z'].entries()) {
+      container.appendChild(
+        this.createNumberInput(label, translation[index] ?? 0, (value) => {
+          const next = [...translation] as [number, number, number];
+          next[index] = value;
+          this.updateParameter('translation', next);
+        })
+      );
+    }
+    return container;
+  }
+
+  private renderTransformBodiesParameters(container: HTMLElement): HTMLElement {
+    if (!this.currentFeature) return container;
+    const params = this.currentFeature.parameters as unknown as TransformBodiesParams;
+    const placement = params.placement;
+
+    container.appendChild(this.createSectionLabel('Placement'));
+    container.appendChild(this.createReadOnlyDetail(
+      'Bodies',
+      `${params.bodyRefs?.length ?? 0} selected`,
+    ));
+    container.appendChild(this.createReadOnlyDetail(
+      'Method',
+      placement?.type ?? 'Unknown',
+    ));
+
+    if (placement?.type === 'Free') {
+      container.appendChild(this.createSectionLabel('Translation'));
+      for (const [index, axis] of ['X', 'Y', 'Z'].entries()) {
+        container.appendChild(this.createNumberInput(`${axis} displacement`, placement.translation[index] ?? 0, (value) => {
+          this.updateTransformPlacement((current) => {
+            if (current.type !== 'Free') return current;
+            const translation = [...current.translation] as [number, number, number];
+            translation[index] = value;
+            return { ...current, translation };
+          });
+        }));
+      }
+      container.appendChild(this.createSectionLabel('Rotation'));
+      for (const [index, axis] of ['X', 'Y', 'Z'].entries()) {
+        container.appendChild(this.createNumberInput(`${axis} rotation`, placement.rotationDegrees[index] ?? 0, (value) => {
+          this.updateTransformPlacement((current) => {
+            if (current.type !== 'Free') return current;
+            const rotationDegrees = [...current.rotationDegrees] as [number, number, number];
+            rotationDegrees[index] = value;
+            return { ...current, rotationDegrees };
+          });
+        }, { useDocumentUnits: false }));
+      }
+      return container;
+    }
+
+    if (placement?.type === 'PointToPoint') {
+      container.appendChild(this.createSectionLabel('World Offset'));
+      const offset = placement.offset ?? [0, 0, 0];
+      for (const [index, axis] of ['X', 'Y', 'Z'].entries()) {
+        container.appendChild(this.createNumberInput(`${axis} offset`, offset[index] ?? 0, (value) => {
+          this.updateTransformPlacement((current) => {
+            if (current.type !== 'PointToPoint') return current;
+            const next = [...(current.offset ?? [0, 0, 0])] as [number, number, number];
+            next[index] = value;
+            return { ...current, offset: next };
+          });
+        }));
+      }
+      return container;
+    }
+
+    if (placement?.type === 'Align') {
+      container.appendChild(this.createNumberInput('Signed gap', placement.gap ?? 0, (value) => {
+        this.updateTransformPlacement((current) => current.type === 'Align'
+          ? { ...current, gap: value }
+          : current);
+      }));
+      container.appendChild(this.createNumberInput('Quarter turns', placement.quarterTurns ?? 0, (value) => {
+        this.updateTransformPlacement((current) => current.type === 'Align'
+          ? { ...current, quarterTurns: Math.round(value) }
+          : current);
+      }, { useDocumentUnits: false }));
+      container.appendChild(this.createCheckboxInput('Oppose face normals', placement.opposed ?? false, (value) => {
+        this.updateTransformPlacement((current) => current.type === 'Align'
+          ? { ...current, opposed: value }
+          : current);
+      }));
+      return container;
+    }
+
+    if (placement?.type === 'AxisAngle') {
+      container.appendChild(this.createNumberInput('Angle', placement.angleDegrees, (value) => {
+        this.updateTransformPlacement((current) => current.type === 'AxisAngle'
+          ? { ...current, angleDegrees: value }
+          : current);
+      }, { useDocumentUnits: false }));
+      return container;
+    }
+
+    const note = document.createElement('p');
+    note.className = 'property-inspector__empty-editor';
+    note.textContent = 'This fixed placement is read-only. Use Move or Align to create an editable placement.';
+    container.appendChild(note);
+    return container;
+  }
+
+  private renderRotateBodyParameters(container: HTMLElement): HTMLElement {
+    if (!this.currentFeature) return container;
+
+    const params = this.currentFeature.parameters as unknown as RotateBodyParams;
+    const rotation = params.rotationDegrees ?? [0, 0, 0];
+
+    container.appendChild(this.createSectionLabel('Target Body'));
+    container.appendChild(
+      this.createReadOnlyDetail('Body', params.bodyRef?.bodyId ?? 'unknown')
+    );
+
+    container.appendChild(this.createSectionLabel('Rotation (Degrees)'));
+    container.appendChild(
+      this.createNumberInput('X', rotation[0] ?? 0, (val) => this.updateRotateDegrees(0, val))
+    );
+    container.appendChild(
+      this.createNumberInput('Y', rotation[1] ?? 0, (val) => this.updateRotateDegrees(1, val))
+    );
+    container.appendChild(
+      this.createNumberInput('Z', rotation[2] ?? 0, (val) => this.updateRotateDegrees(2, val))
+    );
+
+    container.appendChild(this.createSectionLabel('Pivot'));
+    container.appendChild(
+      this.createMappedSelectInput(
+        'Pivot',
+        [
+          { value: 'bodyCenter', label: 'Body Center' },
+          { value: 'worldOrigin', label: 'World Origin' },
+        ],
+        params.pivot ?? 'bodyCenter',
+        (value) => this.updateParameter('pivot', value)
+      )
+    );
+
+    return container;
+  }
+
+  private renderJoinBodiesParameters(container: HTMLElement): HTMLElement {
+    if (!this.currentFeature) return container;
+
+    const params = this.currentFeature.parameters as unknown as JoinBodiesParams;
+    container.appendChild(this.createSectionLabel('Compound Bodies'));
+
+    const summary = document.createElement('div');
+    summary.style.cssText = 'font-size: 12px; color: #aaa;';
+    summary.textContent = `${params.bodyRefs?.length ?? 0} solids grouped into one editable result`;
+    container.appendChild(summary);
+
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size: 11px; color: #888; margin-top: 8px;';
+    note.textContent = 'Compound keeps solids together without performing a material union.';
+    container.appendChild(note);
+    container.appendChild(this.createTechnicalDetailsDisclosure({
+      bodyReferences: params.bodyRefs ?? [],
+    }));
+
+    return container;
+  }
+
+  private renderWoodJointParameters(container: HTMLElement): HTMLElement {
+    if (!this.currentFeature) return container;
+    const params = this.currentFeature.parameters as unknown as WoodJointParams;
+    const labels: Record<WoodJointParams['kind'], string> = {
+      mortiseTenon: 'Mortise & tenon',
+      dado: 'Dado',
+      groove: 'Groove',
+      rabbet: 'Rabbet',
+      crossLap: 'Cross-lap',
+      endLap: 'End-lap',
+      halfLap: 'Half-lap',
+      bridle: 'Bridle',
+      notch: 'Notch',
+      sawCut: 'Saw cut',
+      chamfer: 'Chamfer',
+      threeWayMiter: 'Three-way miter',
+    };
+
+    container.appendChild(this.createReadOnlyDetail('Joint', labels[params.kind] ?? params.kind));
+    container.appendChild(this.createSectionLabel('Fit'));
+    container.appendChild(this.createNumberInput(
+      'Side clearance',
+      params.sideClearance,
+      (value) => this.updateParameter('sideClearance', value)
+    ));
+    container.appendChild(this.createNumberInput(
+      'End clearance',
+      params.endClearance,
+      (value) => this.updateParameter('endClearance', value)
+    ));
+
+    container.appendChild(this.createSectionLabel('Dimensions'));
+    for (const [key, label] of [
+      ['width', 'Width'],
+      ['depth', 'Depth'],
+      ['length', 'Length'],
+      ['offset', 'Offset'],
+      ['kerf', 'Kerf'],
+      ['chamferWidth', 'Chamfer width'],
+    ] as const) {
+      const value = params[key];
+      if (value === undefined) {
+        container.appendChild(this.createReadOnlyDetail(label, 'Automatic from stock'));
+      } else {
+        container.appendChild(this.createNumberInput(
+          label,
+          value,
+          (next) => this.updateParameter(key, next)
+        ));
+      }
+    }
+
+    if (params.kind === 'sawCut') {
+      container.appendChild(this.createSelectInput(
+        'Keep',
+        ['both', 'datumSide', 'oppositeSide'],
+        params.keep ?? 'both',
+        (value) => this.updateParameter('keep', value)
+      ));
+    }
+    if (params.kind === 'threeWayMiter') {
+      container.appendChild(this.createSelectInput(
+        'Result',
+        ['trim', 'split'],
+        params.resultMode ?? 'trim',
+        (value) => this.updateParameter('resultMode', value)
+      ));
+    }
+
+    container.appendChild(this.createSectionLabel('Members'));
+    params.members.forEach((member, index) => {
+      container.appendChild(this.createReadOnlyDetail(
+        `Member ${index + 1}`,
+        `${member.datumRef.kind} datum`
+      ));
+    });
+    container.appendChild(this.createTechnicalDetailsDisclosure({
+      members: params.members,
+    }));
+    return container;
+  }
+
+  private createTechnicalDetailsDisclosure(
+    details: Record<string, unknown>
+  ): HTMLDetailsElement {
+    const disclosure = document.createElement('details');
+    disclosure.className = 'property-inspector__technical-details';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Technical Details';
+    disclosure.appendChild(summary);
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(details, null, 2);
+    disclosure.appendChild(pre);
+    return disclosure;
+  }
+
   /**
    * Update duplicate translation at specific index.
    */
@@ -753,6 +1412,14 @@ export class PropertyInspector {
     const translation = [...(params.translation ?? [0, 0, 0])] as [number, number, number];
     translation[index] = value;
     this.updateParameter('translation', translation);
+  }
+
+  private updateRotateDegrees(index: number, value: number): void {
+    if (!this.currentFeature) return;
+    const params = this.currentFeature.parameters as unknown as RotateBodyParams;
+    const rotationDegrees = [...(params.rotationDegrees ?? [0, 0, 0])] as [number, number, number];
+    rotationDegrees[index] = value;
+    this.updateParameter('rotationDegrees', rotationDegrees);
   }
 
   /**
@@ -802,23 +1469,56 @@ export class PropertyInspector {
   /**
    * Create a number input field.
    */
+  private createCheckboxInput(
+    label: string,
+    checked: boolean,
+    onChange: (checked: boolean) => void,
+  ): HTMLElement {
+    const row = document.createElement('div');
+    row.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+    const input = document.createElement('input');
+    input.id = this.createFieldId(label);
+    input.type = 'checkbox';
+    input.checked = checked;
+    input.addEventListener('change', () => onChange(input.checked));
+    const labelEl = document.createElement('label');
+    labelEl.htmlFor = input.id;
+    labelEl.textContent = label;
+    labelEl.style.cssText = 'font-size: 12px;';
+    row.append(input, labelEl);
+    return row;
+  }
+
   private createNumberInput(
     label: string,
     value: number,
-    onChange: (val: number) => void
+    onChange: (val: number) => void,
+    options: NumberInputOptions = {}
   ): HTMLElement {
     const row = document.createElement('div');
     row.style.cssText = 'display: flex; align-items: center; gap: 8px;';
 
     const labelEl = document.createElement('label');
-    labelEl.textContent = label;
+    const unitLabel = this.documentUnits === 'mm' ? 'mm' : 'in';
+    labelEl.textContent = options.useDocumentUnits ? `${label} (${unitLabel})` : label;
     labelEl.style.cssText = 'flex: 1; font-size: 12px;';
     row.appendChild(labelEl);
 
     const input = document.createElement('input');
-    input.type = 'number';
-    input.step = '0.1';
-    input.value = String(value);
+    input.id = this.createFieldId(label);
+    input.type = 'text';
+    input.inputMode = 'decimal';
+    input.dataset.numericInput = 'true';
+    input.dataset.numericLabel = label;
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    input.title = 'Enter a number, fraction, arithmetic expression, unit, or relative value';
+    input.dataset.unit = options.useDocumentUnits ? unitLabel : 'in';
+    input.value = String(
+      options.useDocumentUnits && this.documentUnits === 'mm'
+        ? this.roundForInput(value * 25.4)
+        : value
+    );
     input.style.cssText = `
       width: 80px;
       padding: 4px 8px;
@@ -828,16 +1528,47 @@ export class PropertyInspector {
       color: #fff;
       font-size: 12px;
     `;
+    labelEl.htmlFor = input.id;
+
+    const feedback = document.createElement('span');
+    feedback.id = `${input.id}-error`;
+    feedback.dataset.numericError = 'true';
+    feedback.setAttribute('role', 'alert');
+    feedback.style.cssText = 'display: none; color: #ff8c8c; font-size: 10px; line-height: 1.2;';
+    input.setAttribute('aria-describedby', feedback.id);
+
+    const field = document.createElement('div');
+    field.style.cssText = 'width: 98px; display: flex; flex-direction: column; gap: 2px;';
 
     input.addEventListener('input', () => {
-      const val = parseFloat(input.value);
-      if (!isNaN(val)) {
-        onChange(val);
+      const parsed = parseNumericInput(input.value, {
+        defaultUnit: options.useDocumentUnits && this.documentUnits === 'mm' ? 'mm' : 'in',
+      });
+      if (!parsed.ok) {
+        input.setAttribute('aria-invalid', 'true');
+        input.setCustomValidity(parsed.error);
+        input.style.borderColor = '#c94b4b';
+        feedback.textContent = parsed.error;
+        feedback.style.display = 'block';
+        return;
       }
+
+      input.removeAttribute('aria-invalid');
+      input.setCustomValidity('');
+      input.style.borderColor = '#444';
+      feedback.textContent = '';
+      feedback.style.display = 'none';
+      onChange(resolveNumericInput(value, parsed));
     });
 
-    row.appendChild(input);
+    field.appendChild(input);
+    field.appendChild(feedback);
+    row.appendChild(field);
     return row;
+  }
+
+  private roundForInput(value: number): number {
+    return Number.parseFloat(value.toFixed(6));
   }
 
   /**
@@ -857,6 +1588,7 @@ export class PropertyInspector {
     row.appendChild(labelEl);
 
     const input = document.createElement('input');
+    input.id = this.createFieldId(label);
     input.type = 'text';
     input.value = value;
     input.style.cssText = `
@@ -868,6 +1600,7 @@ export class PropertyInspector {
       color: #fff;
       font-size: 12px;
     `;
+    labelEl.htmlFor = input.id;
 
     input.addEventListener('input', () => {
       onChange(input.value);
@@ -881,11 +1614,17 @@ export class PropertyInspector {
    * Create a select input.
    */
   private createSelectInput(
+    label: string,
     options: string[],
     value: string,
     onChange: (val: string) => void
   ): HTMLElement {
+    const field = document.createElement('label');
+    field.textContent = label;
+    field.style.cssText = 'display: flex; flex-direction: column; gap: 4px; font-size: 12px;';
+
     const select = document.createElement('select');
+    select.id = this.createFieldId(label);
     select.style.cssText = `
       width: 100%;
       padding: 6px;
@@ -910,31 +1649,154 @@ export class PropertyInspector {
       onChange(select.value);
     });
 
-    return select;
+    field.htmlFor = select.id;
+    field.appendChild(select);
+    return field;
   }
 
   /**
-   * Create a generic parameter row.
+   * Create a labeled mapped select input.
    */
-  private createParamRow(
-    key: string,
-    value: string,
-    _onChange: (val: string) => void
+  private createMappedSelectInput<T extends string>(
+    label: string,
+    options: Array<{ value: T; label: string }>,
+    value: T,
+    onChange: (val: T) => void
   ): HTMLElement {
     const row = document.createElement('div');
     row.style.cssText = 'display: flex; align-items: center; gap: 8px;';
 
-    const label = document.createElement('span');
-    label.textContent = key;
-    label.style.cssText = 'flex: 1; font-size: 12px;';
-    row.appendChild(label);
+    const labelEl = document.createElement('label');
+    labelEl.textContent = label;
+    labelEl.style.cssText = 'flex: 1; font-size: 12px;';
+    row.appendChild(labelEl);
 
-    const val = document.createElement('span');
-    val.textContent = value;
-    val.style.cssText = 'font-size: 12px; color: #aaa;';
-    row.appendChild(val);
+    const select = document.createElement('select');
+    select.id = this.createFieldId(label);
+    select.style.cssText = `
+      width: 100px;
+      padding: 6px;
+      background: #333;
+      border: 1px solid #444;
+      border-radius: 4px;
+      color: #fff;
+      font-size: 12px;
+    `;
+
+    for (const optionData of options) {
+      const option = document.createElement('option');
+      option.value = optionData.value;
+      option.textContent = optionData.label;
+      option.selected = optionData.value === value;
+      select.appendChild(option);
+    }
+
+    select.addEventListener('change', () => {
+      onChange(select.value as T);
+    });
+
+    labelEl.htmlFor = select.id;
+    row.appendChild(select);
+    return row;
+  }
+
+  private createFieldId(label: string): string {
+    propertyFieldId += 1;
+    const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    return `property-${slug || 'field'}-${propertyFieldId}`;
+  }
+
+  /**
+   * Create a read-only detail row.
+   */
+  private createReadOnlyDetail(label: string, value: string): HTMLElement {
+    const row = document.createElement('div');
+    row.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+
+    const labelEl = document.createElement('span');
+    labelEl.textContent = label;
+    labelEl.style.cssText = 'flex: 1; font-size: 12px;';
+    row.appendChild(labelEl);
+
+    const valueEl = document.createElement('span');
+    valueEl.textContent = value;
+    valueEl.style.cssText = 'font-size: 12px; color: #aaa;';
+    row.appendChild(valueEl);
 
     return row;
+  }
+
+  /**
+   * Create a summary card for a sketch entity.
+   */
+  private createSketchEntityCard(entity: SketchEntity, index: number): HTMLElement {
+    const card = document.createElement('div');
+    card.style.cssText = `
+      margin-top: 8px;
+      padding: 8px;
+      background: #2a2a2a;
+      border-radius: 4px;
+      border: 1px solid #333;
+    `;
+
+    const header = document.createElement('div');
+    header.style.cssText = 'display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px;';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size: 12px; font-weight: bold; color: #ddd;';
+
+    const meta = document.createElement('div');
+    meta.style.cssText = 'font-size: 11px; color: #888;';
+    meta.textContent = entity.id;
+
+    if (entity.type === 'rectangle') {
+      const rectangle = entity as RectangleEntity;
+      title.textContent = `Rectangle ${index}`;
+      header.appendChild(title);
+      header.appendChild(meta);
+      card.appendChild(header);
+      card.appendChild(
+        this.createReadOnlyDetail(
+          'Origin',
+          this.formatPoint2D(rectangle.origin)
+        )
+      );
+      card.appendChild(
+        this.createReadOnlyDetail(
+          'Size',
+          `${this.formatNumber(rectangle.width)} × ${this.formatNumber(rectangle.height)}`
+        )
+      );
+      card.appendChild(
+        this.createReadOnlyDetail(
+          'Rotation',
+          `${this.formatNumber((rectangle.rotation * 180) / Math.PI, 1)}°`
+        )
+      );
+      return card;
+    }
+
+    if (entity.type === 'line') {
+      const line = entity as LineEntity;
+      const dx = (line.end[0] ?? 0) - (line.start[0] ?? 0);
+      const dy = (line.end[1] ?? 0) - (line.start[1] ?? 0);
+      const length = Math.sqrt(dx * dx + dy * dy);
+      title.textContent = `Line ${index}`;
+      header.appendChild(title);
+      header.appendChild(meta);
+      card.appendChild(header);
+      card.appendChild(this.createReadOnlyDetail('Start', this.formatPoint2D(line.start)));
+      card.appendChild(this.createReadOnlyDetail('End', this.formatPoint2D(line.end)));
+      card.appendChild(this.createReadOnlyDetail('Length', this.formatNumber(length)));
+      return card;
+    }
+
+    title.textContent = `Entity ${index}`;
+    header.appendChild(title);
+    header.appendChild(meta);
+    card.appendChild(header);
+    card.appendChild(this.createReadOnlyDetail('Type', (entity as { type: string }).type));
+    return card;
   }
 
   /**
@@ -1027,17 +1889,52 @@ export class PropertyInspector {
   /**
    * Update a parameter value.
    */
-  private updateParameter(key: string, value: unknown): void {
+  private updateParameters(updates: Record<string, unknown>): void {
     if (!this.currentFeature) return;
     this.currentFeature = {
       ...this.currentFeature,
       parameters: {
         ...this.currentFeature.parameters,
-        [key]: value,
+        ...updates,
       },
     };
     this.isDirty = true;
     this.updateApplyButton();
+  }
+
+  private updateExtrudeExtent(
+    updates: {
+      direction?: 'OneSided' | 'Symmetric';
+      limit?: 'Distance' | 'UpToFace' | 'ThroughAll';
+    },
+    legacyCut = false
+  ): void {
+    if (!this.currentFeature) return;
+    const params = this.currentFeature.parameters as unknown as ExtrudeParams | ExtrudeCutParams;
+    const currentExtent = params.extent ?? {
+      direction: 'OneSided',
+      limit: 'Distance',
+      ...(params.distance !== undefined ? { distance: params.distance } : {}),
+    };
+    const extent = { ...currentExtent, ...updates };
+    this.updateParameters({
+      extent,
+      ...(legacyCut && updates.limit
+        ? { mode: updates.limit === 'ThroughAll' ? 'through' : 'distance' }
+        : {}),
+    });
+  }
+
+  private updateParameter(key: string, value: unknown): void {
+    this.updateParameters({ [key]: value });
+  }
+
+  private updateTransformPlacement(
+    update: (placement: TransformBodiesParams['placement']) => TransformBodiesParams['placement'],
+  ): void {
+    if (!this.currentFeature) return;
+    const params = this.currentFeature.parameters as unknown as TransformBodiesParams;
+    this.updateParameter('placement', update(params.placement));
   }
 
   /**
@@ -1049,6 +1946,85 @@ export class PropertyInspector {
     const origin = [...(params.origin ?? [0, 0, 0])] as [number, number, number];
     origin[index] = value;
     this.updateParameter('origin', origin);
+  }
+
+  /**
+   * Update sketch plane reference properties for world-plane sketches.
+   */
+  private updateSketchPlaneRef(updates: Partial<PlaneRef>): void {
+    if (!this.currentFeature) return;
+    const params = this.currentFeature.parameters as unknown as SketchParams;
+    if (params.planeRef.type !== 'world') {
+      return;
+    }
+
+    this.updateParameter('planeRef', {
+      ...params.planeRef,
+      ...updates,
+      type: 'world',
+    });
+  }
+
+  /** Update a normalized driving dimension without invalidating its legacy cache. */
+  private updateSketchDrivingDimension(
+    params: NormalizedSketchParams,
+    dimensionId: string,
+    value: number
+  ): void {
+    if (!Number.isFinite(value) || value <= 0) {
+      return;
+    }
+
+    const drivingDimensions = params.drivingDimensions.map((dimension) =>
+      dimension.id === dimensionId ? { ...dimension, value } : { ...dimension }
+    );
+    if (!drivingDimensions.some((dimension) => dimension.id === dimensionId)) {
+      return;
+    }
+
+    const solved = solveSketchConstraints(params.geometry, [
+      ...params.relations,
+      ...drivingDimensions,
+    ]);
+    if (!solved.ok) {
+      return;
+    }
+
+    const dimensions = params.dimensions.map((dimension) =>
+      dimension.id === dimensionId ? { ...dimension, value } : { ...dimension }
+    );
+    const {
+      legacySourceSignature: _legacySourceSignature,
+      ...paramsWithoutLegacySignature
+    } = params;
+    const nextParams = migrateSketchParams({
+      ...paramsWithoutLegacySignature,
+      dimensions,
+      geometry: solved.geometry,
+      relations: params.relations.map((relation) => ({ ...relation })),
+      drivingDimensions,
+    });
+
+    this.currentFeature = {
+      ...this.currentFeature!,
+      parameters: nextParams as unknown as Record<string, unknown>,
+    };
+    this.isDirty = true;
+    this.updateApplyButton();
+  }
+
+  /**
+   * Format a number for compact inspector display.
+   */
+  private formatNumber(value: number, digits = 2): string {
+    return Number.isFinite(value) ? value.toFixed(digits) : '0.00';
+  }
+
+  /**
+   * Format a 2D sketch point.
+   */
+  private formatPoint2D(point: [number, number]): string {
+    return `(${this.formatNumber(point[0] ?? 0)}, ${this.formatNumber(point[1] ?? 0)})`;
   }
 
   /**

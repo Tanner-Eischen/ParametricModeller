@@ -95,7 +95,7 @@ describe('SubObject Utilities', () => {
       addEdge(body, e2);
       addEdge(body, e3);
 
-      const plane = createPlane([0, 0, 0], [0, 0, 1], [1, 0, 0], [0, 1, 0]);
+      const plane = createPlane([0, 0, 0], [0, 0, 1]);
       addPlane(body, plane, 'plane-1');
 
       const face = createFace('plane-1', [e1.id, e2.id, e3.id]);
@@ -131,7 +131,7 @@ describe('SubObject Utilities', () => {
       addEdge(body, e3);
       addEdge(body, e4);
 
-      const plane = createPlane([0, 0, 0], [0, 0, 1], [1, 0, 0], [0, 1, 0]);
+      const plane = createPlane([0, 0, 0], [0, 0, 1]);
       addPlane(body, plane, 'plane-1');
 
       const face = createFace('plane-1', [e1.id, e2.id, e3.id, e4.id]);
@@ -182,9 +182,9 @@ describe('SubObject Utilities', () => {
       addEdge(body, e6);
 
       // Create three faces sharing v1
-      const plane1 = createPlane([0, 0, 0], [0, 0, 1], [1, 0, 0], [0, 1, 0]);
-      const plane2 = createPlane([0, 0, 0], [0, 1, 0], [1, 0, 0], [0, 0, 1]);
-      const plane3 = createPlane([0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]);
+      const plane1 = createPlane([0, 0, 0], [0, 0, 1]);
+      const plane2 = createPlane([0, 0, 0], [0, 1, 0]);
+      const plane3 = createPlane([0, 0, 0], [1, 0, 0]);
 
       addPlane(body, plane1, 'plane-1');
       addPlane(body, plane2, 'plane-2');
@@ -230,7 +230,7 @@ describe('SubObject Utilities', () => {
       addEdge(body, e3);
       addEdge(body, e4);
 
-      const plane = createPlane([0, 0, 0], [0, 0, 1], [1, 0, 0], [0, 1, 0]);
+      const plane = createPlane([0, 0, 0], [0, 0, 1]);
       addPlane(body, plane, 'plane-1');
 
       const face = createFace('plane-1', [e1.id, e2.id, e3.id, e4.id]);
@@ -264,7 +264,7 @@ describe('SubObject Utilities', () => {
       addEdge(body, e3);
       addEdge(body, e4);
 
-      const plane = createPlane([0, 0, 0], [0, 0, 1], [1, 0, 0], [0, 1, 0]);
+      const plane = createPlane([0, 0, 0], [0, 0, 1]);
       addPlane(body, plane, 'plane-1');
 
       const face = createFace('plane-1', [e1.id, e2.id, e3.id, e4.id]);
@@ -302,7 +302,7 @@ describe('SubObject Utilities', () => {
       addEdge(body, e3);
       addEdge(body, e4);
 
-      const plane = createPlane([0, 0, 0], [0, 0, 1], [1, 0, 0], [0, 1, 0]);
+      const plane = createPlane([0, 0, 0], [0, 0, 1]);
       addPlane(body, plane, 'plane-1');
 
       const face = createFace('plane-1', [e1.id, e2.id, e3.id, e4.id]);

@@ -95,7 +95,7 @@ describe('OffsetFaceFeature', () => {
       expect(diagnostics.some(d => d.code === 'MISSING_BODY_ID')).toBe(true);
     });
 
-    it('should fail for invalid distance (<= 0)', () => {
+    it('should fail for a zero distance', () => {
       const params: Partial<OffsetFaceParams> = {
         faceRef: validFaceRef,
         distance: 0,
@@ -105,14 +105,14 @@ describe('OffsetFaceFeature', () => {
       expect(diagnostics.some(d => d.code === 'INVALID_DISTANCE')).toBe(true);
     });
 
-    it('should fail for negative distance', () => {
+    it('should accept a negative signed distance', () => {
       const params: Partial<OffsetFaceParams> = {
         faceRef: validFaceRef,
         distance: -1,
       };
       const diagnostics = validateOffsetFaceParams(params);
 
-      expect(diagnostics.some(d => d.code === 'INVALID_DISTANCE')).toBe(true);
+      expect(diagnostics).toHaveLength(0);
     });
 
     it('should fail for unsupported mode', () => {
@@ -238,7 +238,7 @@ describe('rebuildOffsetFace', () => {
       id: 'test',
       type: OFFSET_FACE_FEATURE_TYPE,
       name: 'Invalid',
-      parameters: { distance: -1 }, // Invalid
+      parameters: { distance: 0 },
       refsIn: [],
       refsOut: [],
       suppressed: false,
@@ -246,6 +246,27 @@ describe('rebuildOffsetFace', () => {
 
     const result = rebuildOffsetFace(feature, context);
     expect(result.ok).toBe(false);
+  });
+
+  it('should rebuild a valid negative offset', () => {
+    const body = createBoxBody({
+      width: 2,
+      depth: 2,
+      height: 2,
+      anchorMode: 'center',
+      origin: [0, 0, 0],
+    });
+    const negativeContext = registerBodies(createRebuildContext(), 'negative_box', [body]);
+    const feature = createOffsetFaceFeature(
+      createFaceRef('+X', body.id, 'negative_box'),
+      -0.5
+    );
+
+    const result = rebuildOffsetFace(feature, negativeContext);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.bodies[0]?.planes.get('+X')?.origin[0]).toBeCloseTo(0.5);
+    }
   });
 
   it('should fail for missing body', () => {

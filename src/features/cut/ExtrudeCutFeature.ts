@@ -1,264 +1,239 @@
 import { generateId } from '../../core/id';
+import type { BodyRef } from '../../geometry';
+import { cloneBody } from '../../geometry/Body';
+import { performCut, validateCutOperation } from '../../geometry/CutBuilder';
+import { validateBody } from '../../geometry/Validation';
 import { error, type Diagnostic } from '../Diagnostics';
 import type { FeatureRecord } from '../FeatureRecord';
 import type { RebuildContext } from '../RebuildContext';
 import type { RebuildHandlerResult } from '../RebuildEngine';
-import { getAllBodies } from '../RebuildContext';
-import {
-  type Sketch,
-  getProfileByIndex,
-} from '../../sketch';
-import { getConstructionPlaneFromRef } from '../../geometry/ConstructionPlane';
-import { performCut, validateCutOperation, computeThroughCutDepth } from '../../geometry/CutBuilder';
-import { cloneBody } from '../../geometry/Body';
-import { validateBody } from '../../geometry/Validation';
 import type { SketchParams } from '../sketch';
-import { createModuleLogger } from '../../core/logger';
+import type { SketchRegionRef } from '../../sketch';
+import {
+  createExtrudePreviewPlan,
+  executeExtrudePlan,
+  type ExtrudePreviewPlan,
+  type ExtrudePreviewPlanResult,
+  type ExtrudeParams,
+} from '../extrude/ExtrudeFeature';
+import {
+  migrateExtrudeExtent,
+  type ExtrudeExtentDefinition,
+} from '../extrude/ExtentResolver';
+import type { SolidBooleanAdapter } from '../extrude/SolidBooleanAdapter';
 
-const log = createModuleLogger('ExtrudeCutFeature');
+export const EXTRUDE_CUT_FEATURE_TYPE = 'extrudeCut';
 
-/**
- * Reference to a body for cut operations.
- */
-export interface BodyRef {
-  /** ID of the body to cut */
-  bodyId: string;
-  /** ID of the feature that created the body */
-  featureId: string;
-}
-
-/**
- * Parameters for the Extrude Cut feature.
- */
+/** Persisted schema with legacy mode/distance retained for existing scenes and UI. */
 export interface ExtrudeCutParams {
-  /** Reference to the target body to cut */
   targetBodyRef: BodyRef;
-  /** ID of the sketch feature containing the cut profile */
   sketchId: string;
-  /** Index of the profile in the sketch (0 = first profile) */
   profileIndex: number;
-  /** Cut mode - distance or through-all */
+  regionRef?: SketchRegionRef;
   mode: 'distance' | 'through';
-  /** Cut distance (required when mode is 'distance') */
   distance?: number;
-  /** Whether to flip cut direction (opposite to plane normal) */
   flip: boolean;
-  /** Cached sketch data for rebuild (same pattern as ExtrudeFeature) */
+  extent?: ExtrudeExtentDefinition;
   sketchData?: SketchParams;
 }
 
-/**
- * Default extrude cut parameters.
- */
-export const defaultExtrudeCutParams: ExtrudeCutParams = {
-  targetBodyRef: {
-    bodyId: '',
-    featureId: '',
-  },
+export interface NormalizedExtrudeCutParams extends ExtrudeCutParams {
+  extent: ExtrudeExtentDefinition;
+}
+
+export type ExtrudeCutPreviewPlan = ExtrudePreviewPlan;
+export type ExtrudeCutPreviewPlanResult = ExtrudePreviewPlanResult;
+
+export const defaultExtrudeCutParams: NormalizedExtrudeCutParams = {
+  targetBodyRef: { bodyId: '', featureId: '' },
   sketchId: '',
   profileIndex: 0,
   mode: 'distance',
   distance: 0.5,
   flip: false,
+  extent: { direction: 'OneSided', limit: 'Distance', distance: 0.5 },
 };
 
-/**
- * Feature type identifier for extrude cut.
- */
-export const EXTRUDE_CUT_FEATURE_TYPE = 'extrudeCut';
+export function migrateExtrudeCutParams(
+  params: Partial<ExtrudeCutParams>
+): NormalizedExtrudeCutParams {
+  const mode = params.mode ?? (params.extent?.limit === 'ThroughAll' ? 'through' : 'distance');
+  const distance = params.distance ?? params.extent?.distance ?? defaultExtrudeCutParams.distance;
+  return {
+    targetBodyRef: params.targetBodyRef
+      ? { ...params.targetBodyRef }
+      : { ...defaultExtrudeCutParams.targetBodyRef },
+    sketchId: params.sketchId ?? '',
+    profileIndex: params.profileIndex ?? 0,
+    ...(params.regionRef ? {
+      regionRef: {
+        ...params.regionRef,
+        outerSegmentIds: [...params.regionRef.outerSegmentIds],
+        holeSegmentIds: params.regionRef.holeSegmentIds.map((ids) => [...ids]),
+      },
+    } : {}),
+    mode,
+    ...(distance !== undefined ? { distance } : {}),
+    flip: params.flip ?? false,
+    extent: migrateExtrudeExtent(params.extent, {
+      mode,
+      ...(distance !== undefined ? { distance } : {}),
+    }),
+    ...(params.sketchData ? { sketchData: params.sketchData } : {}),
+  };
+}
 
-/**
- * Validate extrude cut parameters.
- */
 export function validateExtrudeCutParams(params: Partial<ExtrudeCutParams>): Diagnostic[] {
+  const normalized = migrateExtrudeCutParams(params);
   const diagnostics: Diagnostic[] = [];
-
-  // Target body validation
   if (!params.targetBodyRef) {
-    diagnostics.push(error('MISSING_TARGET_BODY', 'Target body reference is required'));
+    diagnostics.push(error('MISSING_TARGET_BODY', 'Target body reference is required.'));
   } else {
-    if (!params.targetBodyRef.bodyId) {
-      diagnostics.push(error('MISSING_TARGET_BODY', 'Target body ID is required'));
-    }
-    if (!params.targetBodyRef.featureId) {
-      diagnostics.push(error('MISSING_TARGET_BODY', 'Target body feature ID is required'));
-    }
+    if (!normalized.targetBodyRef.bodyId) diagnostics.push(error('MISSING_TARGET_BODY', 'Target body ID is required.'));
+    if (!normalized.targetBodyRef.featureId) diagnostics.push(error('MISSING_TARGET_BODY', 'Target feature ID is required.'));
   }
-
-  // Sketch validation
-  if (!params.sketchId) {
-    diagnostics.push(error('MISSING_SKETCH_ID', 'Sketch ID is required'));
+  if (!normalized.sketchId) diagnostics.push(error('MISSING_SKETCH_ID', 'Sketch ID is required.'));
+  if (!Number.isInteger(normalized.profileIndex) || normalized.profileIndex < 0) {
+    diagnostics.push(error('INVALID_PROFILE_INDEX', 'Profile index must be a non-negative integer.'));
   }
-
-  if (params.profileIndex !== undefined && params.profileIndex < 0) {
-    diagnostics.push(error('INVALID_PROFILE_INDEX', 'Profile index must be >= 0'));
-  }
-
-  // Mode validation
   if (params.mode && !['distance', 'through'].includes(params.mode)) {
-    diagnostics.push(error('UNSUPPORTED_MODE', 'Only distance and through modes are supported'));
+    diagnostics.push(error('UNSUPPORTED_MODE', 'Legacy cut mode must be distance or through.'));
   }
-
-  // Distance validation for distance mode
-  if (params.mode === 'distance') {
-    if (params.distance === undefined || params.distance <= 0) {
-      diagnostics.push(error('INVALID_DISTANCE', 'Distance must be greater than 0 for distance mode'));
-    }
+  if (normalized.extent.limit === 'Distance' &&
+      (!Number.isFinite(normalized.extent.distance) || (normalized.extent.distance ?? 0) <= 0)) {
+    diagnostics.push(error('INVALID_DISTANCE', 'Distance extent must be finite and greater than zero.'));
   }
-
+  if (normalized.extent.limit === 'UpToFace' && !normalized.extent.upToFaceRef) {
+    diagnostics.push(error('MISSING_UP_TO_FACE_REF', 'Up To Face requires a typed face reference.'));
+  }
   return diagnostics;
 }
 
-/**
- * Rebuild handler for the extrude cut feature.
- */
-export function rebuildExtrudeCut(
+export function getExtrudeCutDependencyIds(params: Partial<ExtrudeCutParams>): string[] {
+  const normalized = migrateExtrudeCutParams(params);
+  return [...new Set([
+    normalized.targetBodyRef.featureId,
+    normalized.sketchId,
+    normalized.extent.upToFaceRef?.featureId ?? '',
+  ].filter(Boolean))];
+}
+
+export function createExtrudeCutPreviewPlan(
   feature: FeatureRecord,
   context: RebuildContext
-): RebuildHandlerResult {
-  const params: ExtrudeCutParams = {
-    ...defaultExtrudeCutParams,
-    ...(feature.parameters as Partial<ExtrudeCutParams>),
-  };
-
-  // Validate parameters
-  const diagnostics = validateExtrudeCutParams(params);
+): ExtrudeCutPreviewPlanResult {
+  const params = migrateExtrudeCutParams(feature.parameters as Partial<ExtrudeCutParams>);
+  const diagnostics = validateExtrudeCutParams(feature.parameters as Partial<ExtrudeCutParams>);
   if (diagnostics.length > 0) {
-    return {
-      ok: false,
-      error: 'Invalid extrude cut parameters',
-      diagnostics,
-    };
+    return { ok: false, error: 'Invalid extrude cut parameters.', diagnostics };
   }
-
-  // Get the target body
-  const allBodies = getAllBodies(context);
-  const targetBody = allBodies.find(b => b.id === params.targetBodyRef.bodyId);
-
-  if (!targetBody) {
-    return {
-      ok: false,
-      error: `Target body ${params.targetBodyRef.bodyId} not found`,
-      diagnostics: [error('TARGET_BODY_NOT_FOUND', `Target body ${params.targetBodyRef.bodyId} not found`)],
-    };
-  }
-
-  // Get sketch data from cached params
-  if (!params.sketchId) {
-    return {
-      ok: false,
-      error: 'Sketch ID is required',
-      diagnostics: [error('MISSING_SKETCH_ID', 'Sketch ID is required')],
-    };
-  }
-
-  const sketchData = params.sketchData;
-  if (!sketchData) {
-    return {
-      ok: false,
-      error: 'Sketch data not found',
-      diagnostics: [error('SKETCH_NOT_FOUND', `Sketch ${params.sketchId} not found`)],
-    };
-  }
-
-  // Reconstruct sketch from stored data
-  const sketch: Sketch = {
-    id: params.sketchId,
-    name: 'Sketch',
-    planeRef: sketchData.planeRef,
-    entities: sketchData.entities,
-    dimensions: sketchData.dimensions,
+  const compatibleParams: ExtrudeParams = {
+    sketchId: params.sketchId,
+    profileIndex: params.profileIndex,
+    ...(params.regionRef ? { regionRef: params.regionRef } : {}),
+    distance: params.distance ?? defaultExtrudeCutParams.distance!,
+    flip: params.flip,
+    mode: 'newBody',
+    operation: 'Cut',
+    extent: params.extent,
+    targetBodyRef: params.targetBodyRef,
+    ...(params.sketchData ? { sketchData: params.sketchData } : {}),
   };
+  return createExtrudePreviewPlan({
+    ...feature,
+    type: 'extrude',
+    parameters: compatibleParams as unknown as Record<string, unknown>,
+  }, context);
+}
 
-  // Get the profile
-  const profile = getProfileByIndex(sketch, params.profileIndex);
-  if (!profile) {
-    return {
-      ok: false,
-      error: `Profile index ${params.profileIndex} not found`,
-      diagnostics: [error('PROFILE_NOT_FOUND', `Profile ${params.profileIndex} not found in sketch`)],
-    };
-  }
-
-  // Get construction plane from sketch
-  const plane = getConstructionPlaneFromRef(sketch.planeRef, allBodies);
-
-  if (!plane) {
-    return {
-      ok: false,
-      error: 'Could not resolve sketch plane',
-      diagnostics: [error('PLANE_NOT_FOUND', 'Could not resolve sketch plane reference')],
-    };
-  }
-
-  // Determine cut distance
-  let cutDistance: number;
-  if (params.mode === 'through') {
-    // For through cuts, compute the depth needed to go through the body
-    const throughDepth = computeThroughCutDepth(targetBody, plane, params.flip);
-    if (throughDepth === null) {
-      return {
-        ok: false,
-        error: 'No exit face found for through cut',
-        diagnostics: [error('NO_EXIT_FACE', 'No exit face found for through cut')],
-      };
-    }
-    cutDistance = throughDepth;
-  } else {
-    cutDistance = params.distance ?? 0.5;
-  }
-
-  // Validate the cut operation
-  const cutValidation = validateCutOperation(targetBody, plane, profile, cutDistance, params.flip);
-  if (!cutValidation.valid) {
-    return {
-      ok: false,
-      error: cutValidation.error ?? 'Invalid cut operation',
-      diagnostics: [error('INVALID_CUT', cutValidation.error ?? 'Invalid cut operation')],
-    };
-  }
-
-  // Clone the body for modification
-  const clonedBody = cloneBody(targetBody);
-
-  // Perform the cut
-  const result = performCut(clonedBody, plane, profile, cutDistance, params.flip);
-
-  if (!result) {
-    return {
-      ok: false,
-      error: 'Cut operation failed',
-      diagnostics: [error('CUT_FAILED', 'Cut operation failed to produce valid geometry')],
-    };
-  }
-
-  // Validate the result
-  const validationResult = validateBody(result);
-  if (!validationResult.ok) {
-    return {
-      ok: false,
-      error: 'Cut produced invalid body',
-      diagnostics: validationResult.errors.map(e => error('INVALID_BODY', e.message)),
-    };
-  }
-
-  log.info('Extrude cut complete', {
-    featureId: feature.id,
-    targetBodyId: params.targetBodyRef.bodyId,
-    mode: params.mode,
-    distance: cutDistance,
-  });
-
+export function rebuildExtrudeCutWithAdapter(
+  feature: FeatureRecord,
+  context: RebuildContext,
+  booleanAdapter: SolidBooleanAdapter
+): RebuildHandlerResult {
+  const planResult = createExtrudeCutPreviewPlan(feature, context);
+  if (!planResult.ok) return planResult;
+  const execution = executeExtrudePlan(planResult.plan, booleanAdapter);
+  if (!execution.ok) return execution;
   return {
     ok: true,
-    bodies: [result],
+    bodies: execution.result.bodies,
+    replacedBodyIds: execution.result.replacedBodyIds,
     diagnostics: [],
   };
 }
 
-/**
- * Create an extrude cut feature record.
- */
+/** Default handler preserves the proven planar pocket path and fails closed for symmetric extents. */
+export function rebuildExtrudeCut(
+  feature: FeatureRecord,
+  context: RebuildContext
+): RebuildHandlerResult {
+  const planResult = createExtrudeCutPreviewPlan(feature, context);
+  if (!planResult.ok) return planResult;
+  const plan = planResult.plan;
+  if (!plan.targetBody) {
+    return {
+      ok: false,
+      error: 'Target body was not resolved.',
+      diagnostics: [error('TARGET_BODY_NOT_FOUND', 'Target body was not resolved.', feature.id)],
+    };
+  }
+  if (plan.extent.definition.direction !== 'OneSided' || Math.abs(plan.extent.startOffset) > 0) {
+    return {
+      ok: false,
+      error: 'Symmetric cut requires the planar boolean kernel.',
+      diagnostics: [error(
+        'BOOLEAN_KERNEL_REQUIRED',
+        'Symmetric cut requires the planar boolean kernel; use rebuildExtrudeCutWithAdapter when it is available.',
+        feature.id
+      )],
+    };
+  }
+  const validation = validateCutOperation(
+    plan.targetBody,
+    plan.plane,
+    plan.profile,
+    plan.extent.distance,
+    plan.flip
+  );
+  if (!validation.valid) {
+    return {
+      ok: false,
+      error: validation.error ?? 'Invalid cut operation.',
+      diagnostics: [error('INVALID_CUT', validation.error ?? 'Invalid cut operation.', feature.id)],
+    };
+  }
+  const result = performCut(
+    cloneBody(plan.targetBody, plan.targetBody.id),
+    plan.plane,
+    plan.profile,
+    plan.extent.distance,
+    plan.flip,
+    feature.id
+  );
+  if (!result) {
+    return {
+      ok: false,
+      error: 'Cut operation failed.',
+      diagnostics: [error('CUT_FAILED', 'Cut operation failed to produce geometry.', feature.id)],
+    };
+  }
+  const bodyValidation = validateBody(result);
+  if (!bodyValidation.ok) {
+    return {
+      ok: false,
+      error: 'Cut produced an invalid body.',
+      diagnostics: bodyValidation.errors.map((item) => error('INVALID_BODY', item.message, feature.id)),
+    };
+  }
+  return {
+    ok: true,
+    bodies: [result],
+    diagnostics: [],
+    replacedBodyIds: [plan.targetBody.id],
+  };
+}
+
 export function createExtrudeCutFeature(
   targetBodyRef: BodyRef,
   sketchFeature: FeatureRecord,
@@ -267,110 +242,85 @@ export function createExtrudeCutFeature(
   flip = false,
   name = 'Extrude Cut'
 ): FeatureRecord {
-  // Get sketch data from the feature
-  const sketchParams = sketchFeature.parameters as unknown as SketchParams;
+  return createExtrudeCutFeatureFromParams(targetBodyRef, sketchFeature, {
+    mode,
+    ...(distance !== undefined ? { distance } : {}),
+    flip,
+    extent: migrateExtrudeExtent(undefined, {
+      mode,
+      ...(distance !== undefined ? { distance } : {}),
+    }),
+  }, name);
+}
 
-  const params: ExtrudeCutParams & { distance?: number } = {
+export function createExtrudeCutFeatureFromParams(
+  targetBodyRef: BodyRef,
+  sketchFeature: FeatureRecord,
+  params: Partial<ExtrudeCutParams>,
+  name = 'Extrude Cut'
+): FeatureRecord {
+  const normalized = migrateExtrudeCutParams({
+    ...params,
     targetBodyRef,
     sketchId: sketchFeature.id,
-    profileIndex: 0,
-    mode,
-    flip,
-    // Store sketch data for rebuild
-    sketchData: sketchParams,
-  };
-
-  // Only include distance if provided or mode is distance
-  if (distance !== undefined) {
-    params.distance = distance;
-  }
-
+  });
   return {
     id: generateId(),
     type: EXTRUDE_CUT_FEATURE_TYPE,
     name,
-    parameters: params as unknown as Record<string, unknown>,
-    refsIn: [targetBodyRef.featureId, sketchFeature.id],
+    parameters: normalized as unknown as Record<string, unknown>,
+    refsIn: getExtrudeCutDependencyIds(normalized),
     refsOut: [],
     suppressed: false,
   };
 }
 
-/**
- * Update extrude cut distance.
- */
-export function updateExtrudeCutDistance(
-  feature: FeatureRecord,
-  distance: number
-): FeatureRecord {
+export function updateExtrudeCutDistance(feature: FeatureRecord, distance: number): FeatureRecord {
   if (feature.type !== EXTRUDE_CUT_FEATURE_TYPE) return feature;
-
-  const params = feature.parameters as unknown as ExtrudeCutParams;
+  const params = migrateExtrudeCutParams(feature.parameters as Partial<ExtrudeCutParams>);
   return {
     ...feature,
     parameters: {
       ...params,
-      distance,
       mode: 'distance',
+      distance,
+      extent: { ...params.extent, limit: 'Distance', distance },
     } as unknown as Record<string, unknown>,
   };
 }
 
-/**
- * Update extrude cut mode.
- */
 export function updateExtrudeCutMode(
   feature: FeatureRecord,
   mode: 'distance' | 'through'
 ): FeatureRecord {
   if (feature.type !== EXTRUDE_CUT_FEATURE_TYPE) return feature;
-
-  const params = feature.parameters as unknown as ExtrudeCutParams;
+  const params = migrateExtrudeCutParams(feature.parameters as Partial<ExtrudeCutParams>);
   return {
     ...feature,
     parameters: {
       ...params,
       mode,
+      extent: {
+        ...params.extent,
+        limit: mode === 'through' ? 'ThroughAll' : 'Distance',
+      },
     } as unknown as Record<string, unknown>,
   };
 }
 
-/**
- * Update extrude cut flip direction.
- */
-export function updateExtrudeCutFlip(
-  feature: FeatureRecord,
-  flip: boolean
-): FeatureRecord {
+export function updateExtrudeCutFlip(feature: FeatureRecord, flip: boolean): FeatureRecord {
   if (feature.type !== EXTRUDE_CUT_FEATURE_TYPE) return feature;
-
-  const params = feature.parameters as unknown as ExtrudeCutParams;
-  return {
-    ...feature,
-    parameters: {
-      ...params,
-      flip,
-    } as unknown as Record<string, unknown>,
-  };
+  return { ...feature, parameters: { ...feature.parameters, flip } };
 }
 
-/**
- * Get extrude cut parameters from a feature.
- */
 export function getExtrudeCutParams(feature: FeatureRecord): ExtrudeCutParams | null {
-  if (feature.type !== EXTRUDE_CUT_FEATURE_TYPE) return null;
-  return feature.parameters as unknown as ExtrudeCutParams;
+  return feature.type === EXTRUDE_CUT_FEATURE_TYPE
+    ? migrateExtrudeCutParams(feature.parameters as Partial<ExtrudeCutParams>)
+    : null;
 }
 
-/**
- * Create a BodyRef from body and feature IDs.
- */
-export function createBodyRef(
-  bodyId: string,
-  featureId: string
-): BodyRef {
-  return {
-    bodyId,
-    featureId,
-  };
+export function createBodyRef(bodyId: string, featureId: string): BodyRef {
+  return { bodyId, featureId };
 }
+
+export type { BodyRef };

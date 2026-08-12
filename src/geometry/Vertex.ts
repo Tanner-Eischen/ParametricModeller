@@ -1,4 +1,5 @@
 import { generateId } from '../core/id';
+import { DEFAULT_TOLERANCE_POLICY } from './TolerancePolicy';
 
 /**
  * A vertex in the B-Rep structure.
@@ -58,7 +59,7 @@ export function removeEdgeFromVertex(vertex: Vertex, edgeId: string): Vertex {
 export function verticesEqual(
   a: Vertex,
   b: Vertex,
-  tolerance = 1e-6
+  tolerance = DEFAULT_TOLERANCE_POLICY.linear
 ): boolean {
   return (
     Math.abs(a.position[0] - b.position[0]) < tolerance &&

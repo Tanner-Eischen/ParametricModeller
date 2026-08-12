@@ -10,6 +10,8 @@ This pack expands each milestone from the progressive plan into:
 
 ## Milestones
 
+- [Professionalization roadmap](professionalization_roadmap.md)
+
 - [Milestone 00: Project skeleton and rendering](milestone_00.md)
 - [Milestone 01: Parametric primitives](milestone_01.md)
 - [Milestone 02: Sketch-on-plane and Extrude](milestone_02.md)

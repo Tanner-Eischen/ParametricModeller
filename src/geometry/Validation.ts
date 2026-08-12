@@ -1,6 +1,7 @@
 import type { Body } from './Body';
 import type { Edge } from './Edge';
 import type { Vertex } from './Vertex';
+import { DEFAULT_TOLERANCE_POLICY } from './TolerancePolicy';
 
 /**
  * Result of body validation.
@@ -62,7 +63,10 @@ export function validateBody(body: Body): ValidationResult {
       });
     }
 
-    for (const edgeId of face.boundaryEdgeIds) {
+    for (const edgeId of [
+      ...face.boundaryEdgeIds,
+      ...(face.innerBoundaryEdgeIds?.flat() ?? []),
+    ]) {
       if (!body.edges.has(edgeId)) {
         errors.push({
           code: 'INVALID_FACE_EDGE',
@@ -133,6 +137,81 @@ export function validateBody(body: Body): ValidationResult {
   };
 }
 
+/** Strict validation for a closed planar B-Rep shell used by boolean operations. */
+export function validateClosedManifoldBody(body: Body): ValidationResult {
+  const base = validateBody(body);
+  const errors = [...base.errors];
+  const warnings = [...base.warnings];
+
+  for (const edge of body.edges.values()) {
+    if (edge.faceIds.length !== 2) {
+      errors.push({
+        code: 'OPEN_SHELL_EDGE',
+        message: `Closed solids require exactly two adjacent faces on edge ${edge.id}`,
+        entityId: edge.id,
+      });
+    }
+    for (const faceId of edge.faceIds) {
+      const face = body.faces.get(faceId);
+      const faceEdges = face
+        ? [...face.boundaryEdgeIds, ...(face.innerBoundaryEdgeIds?.flat() ?? [])]
+        : [];
+      if (!face || !faceEdges.includes(edge.id)) {
+        errors.push({
+          code: 'INVALID_EDGE_FACE',
+          message: `Edge ${edge.id} references a face that does not reference the edge`,
+          entityId: edge.id,
+        });
+      }
+    }
+  }
+
+  for (const face of body.faces.values()) {
+    const plane = body.planes.get(face.planeId);
+    for (const loop of [face.boundaryEdgeIds, ...(face.innerBoundaryEdgeIds ?? [])]) {
+      if (!isClosedEdgeLoop(body, loop)) {
+        errors.push({
+          code: 'OPEN_FACE_LOOP',
+          message: `Face ${face.id} contains an open or branching boundary loop`,
+          entityId: face.id,
+        });
+      }
+      if (plane) {
+        const vertexIds = new Set(loop.flatMap((edgeId) => body.edges.get(edgeId)?.vertexIds ?? []));
+        for (const vertexId of vertexIds) {
+          const vertex = body.vertices.get(vertexId);
+          if (vertex && Math.abs(
+            plane.normal[0] * (vertex.position[0] - plane.origin[0])
+            + plane.normal[1] * (vertex.position[1] - plane.origin[1])
+            + plane.normal[2] * (vertex.position[2] - plane.origin[2])
+          ) > DEFAULT_TOLERANCE_POLICY.planarity) {
+            errors.push({
+              code: 'NON_PLANAR_FACE_VERTEX',
+              message: `Face ${face.id} has a vertex outside its supporting plane`,
+              entityId: face.id,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return { ok: errors.length === 0, errors, warnings };
+}
+
+function isClosedEdgeLoop(body: Body, edgeIds: readonly string[]): boolean {
+  if (edgeIds.length < 3 || new Set(edgeIds).size !== edgeIds.length) return false;
+  const degree = new Map<string, number>();
+  for (const edgeId of edgeIds) {
+    const edge = body.edges.get(edgeId);
+    if (!edge) return false;
+    for (const vertexId of edge.vertexIds) {
+      degree.set(vertexId, (degree.get(vertexId) ?? 0) + 1);
+    }
+  }
+  return degree.size >= 3 && [...degree.values()].every((value) => value === 2);
+}
+
 /**
  * Check if an edge is manifold (1-2 adjacent faces).
  */
@@ -145,7 +224,7 @@ export function isManifoldEdge(edge: Edge): boolean {
  */
 export function validateUniqueVertices(
   vertices: Vertex[],
-  tolerance = 1e-6
+  tolerance = DEFAULT_TOLERANCE_POLICY.linear
 ): boolean {
   for (let i = 0; i < vertices.length; i++) {
     const vertexA = vertices[i];

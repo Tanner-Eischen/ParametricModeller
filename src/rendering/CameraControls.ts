@@ -3,6 +3,10 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { eventBus } from '../core/eventBus';
 import { createModuleLogger } from '../core/logger';
 import type { ConstructionPlane } from '../geometry';
+import {
+  notifySketchCameraChanged,
+  registerSketchCamera,
+} from './SketchProjector';
 
 const log = createModuleLogger('CameraControls');
 
@@ -28,10 +32,12 @@ export class CameraControls {
   private orthographicCamera: THREE.OrthographicCamera;
   private activeCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
   private controls: OrbitControls;
+  private unregisterSketchCamera: (() => void) | null = null;
   private projection: 'perspective' | 'orthographic' = 'perspective';
   private savedState: {
     position: THREE.Vector3;
     target: THREE.Vector3;
+    up: THREE.Vector3;
     projection: 'perspective' | 'orthographic';
   } | null = null;
 
@@ -66,6 +72,7 @@ export class CameraControls {
 
     // Create orbit controls
     this.controls = new OrbitControls(this.activeCamera, this._container);
+    this.unregisterSketchCamera = registerSketchCamera(this._container, () => this.activeCamera);
     this.controls.enableDamping = opts.enableDamping ?? true;
     this.controls.dampingFactor = opts.dampingFactor ?? 0.05;
     this.controls.minDistance = opts.minDistance ?? 0.1;
@@ -86,6 +93,7 @@ export class CameraControls {
           this.controls.target.z,
         ],
       });
+      notifySketchCameraChanged(this._container);
     });
 
     log.info('CameraControls initialized');
@@ -110,6 +118,7 @@ export class CameraControls {
     this.orthographicCamera.top = frustumSize;
     this.orthographicCamera.bottom = -frustumSize;
     this.orthographicCamera.updateProjectionMatrix();
+    notifySketchCameraChanged(this._container);
   }
 
   toggleProjection(): void {
@@ -136,6 +145,7 @@ export class CameraControls {
     }
 
     this.activeCamera.position.copy(position);
+    this.activeCamera.up.copy(this.controls.object.up);
     this.controls.object = this.activeCamera;
     this.controls.target.copy(target);
     this.controls.update();
@@ -150,10 +160,32 @@ export class CameraControls {
 
   fitToView(box: THREE.Box3): void {
     const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    const radius = Math.max(sphere.radius, 0.05);
+    const padding = 1.3;
 
-    const distance = maxDim * 2;
+    let distance: number;
+    if (this.activeCamera instanceof THREE.PerspectiveCamera) {
+      const verticalHalfFov = THREE.MathUtils.degToRad(this.activeCamera.fov) / 2;
+      const aspect = Number.isFinite(this.activeCamera.aspect) && this.activeCamera.aspect > 0
+        ? this.activeCamera.aspect
+        : 1;
+      if (this.activeCamera.aspect !== aspect) {
+        this.activeCamera.aspect = aspect;
+        this.activeCamera.updateProjectionMatrix();
+      }
+      const horizontalHalfFov = Math.atan(
+        Math.tan(verticalHalfFov) * aspect,
+      );
+      const limitingHalfFov = Math.min(verticalHalfFov, horizontalHalfFov);
+      distance = radius * padding / Math.sin(limitingHalfFov);
+    } else {
+      const halfWidth = (this.activeCamera.right - this.activeCamera.left) / 2;
+      const halfHeight = (this.activeCamera.top - this.activeCamera.bottom) / 2;
+      this.activeCamera.zoom = Math.min(halfWidth, halfHeight) / (radius * padding);
+      this.activeCamera.updateProjectionMatrix();
+      distance = Math.max(radius * 4, 1);
+    }
 
     // Position camera to view the box
     const direction = this.activeCamera.position.clone().sub(this.controls.target).normalize();
@@ -185,6 +217,7 @@ export class CameraControls {
       this.savedState = {
         position: this.activeCamera.position.clone(),
         target: this.controls.target.clone(),
+        up: this.activeCamera.up.clone(),
         projection: this.projection,
       };
       log.debug('Camera state saved for sketch mode');
@@ -204,6 +237,7 @@ export class CameraControls {
 
     // Set camera position and target
     this.activeCamera.position.copy(cameraPosition);
+    this.activeCamera.up.set(...plane.vAxis).normalize();
     this.controls.target.copy(origin);
     this.controls.update();
 
@@ -230,6 +264,7 @@ export class CameraControls {
 
     // Restore position and target
     this.activeCamera.position.copy(this.savedState.position);
+    this.activeCamera.up.copy(this.savedState.up);
     this.controls.target.copy(this.savedState.target);
     this.controls.update();
 
@@ -247,6 +282,8 @@ export class CameraControls {
   }
 
   dispose(): void {
+    this.unregisterSketchCamera?.();
+    this.unregisterSketchCamera = null;
     this.controls.dispose();
     log.info('CameraControls disposed');
   }

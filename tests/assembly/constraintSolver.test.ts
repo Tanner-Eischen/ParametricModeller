@@ -17,7 +17,7 @@ import {
   checkAllConstraints,
   type ConstraintSolverContext,
 } from '../../src/assembly/constraints/ConstraintSolver';
-import { createInstanceFaceRef, createIdentityTransform, createComponentInstance } from '../../src/assembly/AssemblyTypes';
+import { createInstanceFaceRef, createComponentInstance } from '../../src/assembly/AssemblyTypes';
 import type { Body } from '../../src/geometry';
 import { createBody, addVertex, addEdge, addFace, addPlane } from '../../src/geometry';
 import { createVertex } from '../../src/geometry/Vertex';
@@ -31,7 +31,7 @@ function createBoxBody(id: string, size: number = 1): Body {
 
   // Add 8 vertices
   const h = size / 2;
-  const vertices = [
+  const vertices: [number, number, number][] = [
     [-h, -h, -h],
     [h, -h, -h],
     [h, h, -h],
@@ -48,7 +48,7 @@ function createBoxBody(id: string, size: number = 1): Body {
   }
 
   // Add 12 edges
-  const edgeVertexPairs = [
+  const edgeVertexPairs: [number, number][] = [
     [0, 1], [1, 2], [2, 3], [3, 0], // bottom
     [4, 5], [5, 6], [6, 7], [7, 4], // top
     [0, 4], [1, 5], [2, 6], [3, 7], // sides
@@ -56,7 +56,7 @@ function createBoxBody(id: string, size: number = 1): Body {
 
   for (let i = 0; i < edgeVertexPairs.length; i++) {
     const pair = edgeVertexPairs[i]!;
-    addEdge(body, createEdge([`v${pair[0]}`, `v${pair[1]}`], `e${i}`));
+    addEdge(body, createEdge(`v${pair[0]}`, `v${pair[1]}`, `e${i}`));
   }
 
   // Add 6 faces
@@ -269,6 +269,22 @@ describe('FlushMateSolver', () => {
       expect(tzZero).not.toBe(tzOffset);
     }
   });
+
+  it('does not consume tangential sliding degrees of freedom', () => {
+    const bodyA = createBoxBody('bodyA', 1);
+    const bodyB = createBoxBody('bodyB', 1);
+    for (const vertex of bodyB.vertices.values()) vertex.position[0] += 5;
+    for (const plane of bodyB.planes.values()) plane.origin[0] += 5;
+    const refA = createInstanceFaceRef('instA', 'f1', 'bodyA');
+    const refB = createInstanceFaceRef('instB', 'f0', 'bodyB');
+
+    const result = solveFlushMate(bodyA, refA, bodyB, refB, 0);
+
+    expect(result.ok).toBe(true);
+    expect(result.transform?.[12]).toBeCloseTo(0);
+    expect(result.transform?.[13]).toBeCloseTo(0);
+    expect(result.transform?.[14]).toBeCloseTo(1);
+  });
 });
 
 describe('checkFlushMate', () => {
@@ -301,7 +317,7 @@ describe('checkFlushMate', () => {
 });
 
 describe('ConstraintSolver', () => {
-  it('should ground the first instance', () => {
+  it('does not invent grounding when no instance is explicitly grounded', () => {
     const instance1 = createComponentInstance('comp1', 'Instance 1');
     const instance2 = createComponentInstance('comp1', 'Instance 2');
 
@@ -323,7 +339,7 @@ describe('ConstraintSolver', () => {
     expect(result.ok).toBe(true);
 
     const updated1 = result.updatedInstances.get('inst1');
-    expect(updated1?.grounded).toBe(true);
+    expect(updated1?.grounded).toBe(false);
   });
 
   it('should solve empty constraints', () => {
@@ -375,6 +391,474 @@ describe('ConstraintSolver', () => {
 
     expect(result.ok).toBe(true);
     expect(result.satisfiedConstraints.has('c1')).toBe(false);
+  });
+
+  it('solves against refreshed geometry and reports residuals plus precise axis locks', () => {
+    const instanceA = createComponentInstance('comp1', 'Instance A');
+    const instanceB = createComponentInstance('comp1', 'Instance B');
+    instanceA.id = 'instA';
+    instanceA.grounded = true;
+    instanceB.id = 'instB';
+    const constraint = {
+      id: 'mate:top-bottom',
+      name: 'Top to bottom',
+      type: 'flush' as const,
+      refA: createInstanceFaceRef('instA', 'f1', 'bodyA'),
+      refB: createInstanceFaceRef('instB', 'f0', 'bodyB'),
+      offset: 0,
+      satisfied: false,
+      suppressed: false,
+    };
+
+    const result = solveConstraints({
+      instances: [instanceB, instanceA],
+      constraints: [constraint],
+      instanceBodies: new Map([
+        ['instA', [createBoxBody('bodyA')]],
+        ['instB', [createBoxBody('bodyB')]],
+      ]),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.committed).toBe(true);
+    expect(result.updatedInstances.get('instB')?.transform[14]).toBeCloseTo(1);
+    expect(
+      result.updatedInstanceBodies.get('instB')?.[0]?.planes.get('p0')?.origin[2]
+    ).toBeCloseTo(0.5);
+    expect(result.constraintStatuses.get(constraint.id)).toEqual(
+      expect.objectContaining({ state: 'satisfied', movedInstanceId: 'instB' })
+    );
+    expect(result.residuals.get(constraint.id)?.offsetError).toBeCloseTo(0);
+    expect(result.updatedInstances.get('instB')?.lockedAxes).toEqual({
+      translateX: false,
+      translateY: false,
+      translateZ: true,
+      rotateX: true,
+      rotateY: true,
+      rotateZ: false,
+    });
+  });
+
+  it('uses the regeneration hook as the source of truth before accepting a mate', () => {
+    const instanceA = createComponentInstance('comp1', 'Instance A');
+    const instanceB = createComponentInstance('comp1', 'Instance B');
+    instanceA.id = 'instA';
+    instanceA.grounded = true;
+    instanceB.id = 'instB';
+    let regenerationCount = 0;
+    const constraint = {
+      id: 'mate:regenerated',
+      name: 'Regenerated mate',
+      type: 'flush' as const,
+      refA: createInstanceFaceRef('instA', 'f1', 'bodyA'),
+      refB: createInstanceFaceRef('instB', 'f0', 'bodyB'),
+      offset: 0,
+      satisfied: false,
+      suppressed: false,
+    };
+
+    const result = solveConstraints({
+      instances: [instanceA, instanceB],
+      constraints: [constraint],
+      instanceBodies: new Map([
+        ['instA', [createBoxBody('bodyA')]],
+        ['instB', [createBoxBody('bodyB')]],
+      ]),
+      regenerateInstanceBodies: (instance) => {
+        regenerationCount += 1;
+        const body = createBoxBody('bodyB');
+        const z = instance.transform[14]!;
+        for (const vertex of body.vertices.values()) {
+          vertex.position[2] += z;
+        }
+        for (const plane of body.planes.values()) {
+          plane.origin[2] += z;
+        }
+        return [body];
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(regenerationCount).toBe(1);
+    expect(result.constraintStatuses.get(constraint.id)?.state).toBe('satisfied');
+    expect(
+      result.updatedInstanceBodies.get('instB')?.[0]?.planes.get('p0')?.origin[2]
+    ).toBeCloseTo(0.5);
+  });
+
+  it('converges compatible mates that require a later Gauss-Seidel pass', () => {
+    const instanceA = createComponentInstance('comp1', 'Instance A');
+    const instanceB = createComponentInstance('comp1', 'Instance B');
+    const instanceC = createComponentInstance('comp1', 'Instance C');
+    instanceA.id = 'instA';
+    instanceA.grounded = true;
+    instanceB.id = 'instB';
+    instanceC.id = 'instC';
+
+    // Persist B-to-C first. It initially places C over B, then A-to-B moves B
+    // and invalidates the first mate. The next pass must revisit B-to-C using
+    // B's regenerated geometry.
+    const mateBToC = {
+      id: 'mate:b-to-c',
+      name: 'B top to C bottom',
+      type: 'flush' as const,
+      refA: createInstanceFaceRef('instB', 'f1', 'bodyB'),
+      refB: createInstanceFaceRef('instC', 'f0', 'bodyC'),
+      offset: 0,
+      satisfied: false,
+      suppressed: false,
+    };
+    const mateAToB = {
+      id: 'mate:a-to-b',
+      name: 'A top to B bottom',
+      type: 'flush' as const,
+      refA: createInstanceFaceRef('instA', 'f1', 'bodyA'),
+      refB: createInstanceFaceRef('instB', 'f0', 'bodyB'),
+      offset: 0,
+      satisfied: false,
+      suppressed: false,
+    };
+
+    const result = solveConstraints({
+      instances: [instanceC, instanceB, instanceA],
+      constraints: [mateBToC, mateAToB],
+      instanceBodies: new Map([
+        ['instA', [createBoxBody('bodyA')]],
+        ['instB', [createBoxBody('bodyB')]],
+        ['instC', [createBoxBody('bodyC')]],
+      ]),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.committed).toBe(true);
+    expect(result.updatedInstances.get('instB')?.transform[14]).toBeCloseTo(1);
+    expect(result.updatedInstances.get('instC')?.transform[14]).toBeCloseTo(2);
+    expect(result.residuals.get(mateBToC.id)?.offsetError).toBeCloseTo(0);
+    expect(result.residuals.get(mateAToB.id)?.offsetError).toBeCloseTo(0);
+    expect(result.satisfiedConstraints).toEqual(
+      new Set([mateBToC.id, mateAToB.id])
+    );
+  });
+
+  it('produces identical transforms and residuals across ten multi-mate solves', () => {
+    const snapshots: string[] = [];
+
+    for (let run = 0; run < 10; run += 1) {
+      const instanceA = createComponentInstance('comp1', 'Instance A');
+      const instanceB = createComponentInstance('comp1', 'Instance B');
+      const instanceC = createComponentInstance('comp1', 'Instance C');
+      instanceA.id = 'instA';
+      instanceA.grounded = true;
+      instanceB.id = 'instB';
+      instanceC.id = 'instC';
+      const constraints = [
+        {
+          id: 'mate:b-to-c',
+          name: 'B top to C bottom',
+          type: 'flush' as const,
+          refA: createInstanceFaceRef('instB', 'f1', 'bodyB'),
+          refB: createInstanceFaceRef('instC', 'f0', 'bodyC'),
+          offset: 0,
+          satisfied: false,
+          suppressed: false,
+        },
+        {
+          id: 'mate:a-to-b',
+          name: 'A top to B bottom',
+          type: 'flush' as const,
+          refA: createInstanceFaceRef('instA', 'f1', 'bodyA'),
+          refB: createInstanceFaceRef('instB', 'f0', 'bodyB'),
+          offset: 0,
+          satisfied: false,
+          suppressed: false,
+        },
+      ];
+      const result = solveConstraints({
+        instances: [instanceC, instanceA, instanceB],
+        constraints,
+        instanceBodies: new Map([
+          ['instA', [createBoxBody('bodyA')]],
+          ['instB', [createBoxBody('bodyB')]],
+          ['instC', [createBoxBody('bodyC')]],
+        ]),
+      });
+
+      expect(result.ok).toBe(true);
+      snapshots.push(JSON.stringify({
+        transforms: [...result.updatedInstances]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([id, instance]) => [id, instance.transform]),
+        residuals: [...result.residuals]
+          .sort(([left], [right]) => left.localeCompare(right)),
+        statuses: [...result.constraintStatuses]
+          .sort(([left], [right]) => left.localeCompare(right)),
+      }));
+    }
+
+    expect(new Set(snapshots).size).toBe(1);
+  });
+
+  it('rolls back a conflicting mate cycle after the bounded pass limit', () => {
+    const instanceA = createComponentInstance('comp1', 'Instance A');
+    const instanceB = createComponentInstance('comp1', 'Instance B');
+    instanceA.id = 'instA';
+    instanceA.grounded = true;
+    instanceB.id = 'instB';
+    const common = {
+      name: 'Conflicting offset',
+      type: 'offset' as const,
+      refA: createInstanceFaceRef('instA', 'f1', 'bodyA'),
+      refB: createInstanceFaceRef('instB', 'f0', 'bodyB'),
+      satisfied: false,
+      suppressed: false,
+    };
+
+    const result = solveConstraints({
+      instances: [instanceA, instanceB],
+      constraints: [
+        { ...common, id: 'mate:offset-zero', offset: 0 },
+        { ...common, id: 'mate:offset-one', offset: 1 },
+      ],
+      instanceBodies: new Map([
+        ['instA', [createBoxBody('bodyA')]],
+        ['instB', [createBoxBody('bodyB')]],
+      ]),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.committed).toBe(false);
+    expect(result.errors.get('mate:offset-zero')).toContain(
+      'did not converge after 20 passes'
+    );
+    expect(result.updatedInstances.get('instB')?.transform).toEqual(
+      instanceB.transform
+    );
+    expect(
+      result.updatedInstanceBodies.get('instB')?.[0]?.planes.get('p0')?.origin[2]
+    ).toBeCloseTo(-0.5);
+  });
+
+  it('honors explicit grounding even when the grounded instance is listed second', () => {
+    const instanceA = createComponentInstance('comp1', 'Instance A');
+    const instanceB = createComponentInstance('comp1', 'Instance B');
+    instanceA.id = 'instA';
+    instanceB.id = 'instB';
+    instanceB.grounded = true;
+    const constraint = {
+      id: 'mate:reverse',
+      name: 'Reverse move',
+      type: 'flush' as const,
+      refA: createInstanceFaceRef('instA', 'f1', 'bodyA'),
+      refB: createInstanceFaceRef('instB', 'f0', 'bodyB'),
+      offset: 0,
+      satisfied: false,
+      suppressed: false,
+    };
+
+    const result = solveConstraints({
+      instances: [instanceA, instanceB],
+      constraints: [constraint],
+      instanceBodies: new Map([
+        ['instA', [createBoxBody('bodyA')]],
+        ['instB', [createBoxBody('bodyB')]],
+      ]),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.groundedInstanceIds).toEqual(new Set(['instB']));
+    expect(result.updatedInstances.get('instB')?.transform[14]).toBeCloseTo(0);
+    expect(result.updatedInstances.get('instA')?.transform[14]).toBeCloseTo(-1);
+  });
+
+  it('keeps both instances movable when neither is explicitly grounded', () => {
+    const instanceZ = createComponentInstance('comp1', 'Instance Z');
+    const instanceA = createComponentInstance('comp1', 'Instance A');
+    instanceZ.id = 'z-instance';
+    instanceA.id = 'a-instance';
+
+    const result = solveConstraints({
+      instances: [instanceZ, instanceA],
+      constraints: [],
+      instanceBodies: new Map(),
+    });
+
+    expect(result.groundedInstanceIds).toEqual(new Set());
+    expect(result.updatedInstances.get('a-instance')?.grounded).toBe(false);
+    expect(result.updatedInstances.get('z-instance')?.grounded).toBe(false);
+  });
+
+  it('does not silently move reference A when deterministic reference B is locked', () => {
+    const instanceA = createComponentInstance('comp1', 'Instance A');
+    const instanceB = createComponentInstance('comp1', 'Instance B');
+    instanceA.id = 'instA';
+    instanceB.id = 'instB';
+    instanceB.lockedAxes.translateZ = true;
+    const constraint = {
+      id: 'mate:deterministic-lock',
+      name: 'Deterministic locked mate',
+      type: 'flush' as const,
+      refA: createInstanceFaceRef('instA', 'f1', 'bodyA'),
+      refB: createInstanceFaceRef('instB', 'f0', 'bodyB'),
+      offset: 0,
+      satisfied: false,
+      suppressed: false,
+    };
+
+    const result = solveConstraints({
+      instances: [instanceA, instanceB],
+      constraints: [constraint],
+      instanceBodies: new Map([
+        ['instA', [createBoxBody('bodyA')]],
+        ['instB', [createBoxBody('bodyB')]],
+      ]),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.get(constraint.id)).toContain('translateZ');
+    expect(result.updatedInstances.get('instA')?.transform).toEqual(instanceA.transform);
+    expect(result.updatedInstances.get('instB')?.transform).toEqual(instanceB.transform);
+  });
+
+  it('reports locked-axis conflicts without partially moving either instance', () => {
+    const instanceA = createComponentInstance('comp1', 'Instance A');
+    const instanceB = createComponentInstance('comp1', 'Instance B');
+    instanceA.id = 'instA';
+    instanceA.grounded = true;
+    instanceB.id = 'instB';
+    instanceB.lockedAxes.translateZ = true;
+    const constraint = {
+      id: 'mate:locked',
+      name: 'Locked mate',
+      type: 'flush' as const,
+      refA: createInstanceFaceRef('instA', 'f1', 'bodyA'),
+      refB: createInstanceFaceRef('instB', 'f0', 'bodyB'),
+      offset: 0,
+      satisfied: false,
+      suppressed: false,
+    };
+
+    const result = solveConstraints({
+      instances: [instanceA, instanceB],
+      constraints: [constraint],
+      instanceBodies: new Map([
+        ['instA', [createBoxBody('bodyA')]],
+        ['instB', [createBoxBody('bodyB')]],
+      ]),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.committed).toBe(false);
+    expect(result.constraintStatuses.get(constraint.id)?.state).toBe('conflicting');
+    expect(result.updatedInstances.get('instB')?.transform[14]).toBeCloseTo(0);
+  });
+
+  it('rolls back earlier mate transforms when a later constraint is broken', () => {
+    const instanceA = createComponentInstance('comp1', 'Instance A');
+    const instanceB = createComponentInstance('comp1', 'Instance B');
+    instanceA.id = 'instA';
+    instanceA.grounded = true;
+    instanceB.id = 'instB';
+    const validConstraint = {
+      id: 'mate:valid',
+      name: 'Valid mate',
+      type: 'flush' as const,
+      refA: createInstanceFaceRef('instA', 'f1', 'bodyA'),
+      refB: createInstanceFaceRef('instB', 'f0', 'bodyB'),
+      offset: 0,
+      satisfied: false,
+      suppressed: false,
+    };
+    const brokenConstraint = {
+      ...validConstraint,
+      id: 'mate:broken',
+      name: 'Broken mate',
+      refB: createInstanceFaceRef('instB', 'missing-face', 'bodyB'),
+    };
+
+    const result = solveConstraints({
+      instances: [instanceA, instanceB],
+      constraints: [validConstraint, brokenConstraint],
+      instanceBodies: new Map([
+        ['instA', [createBoxBody('bodyA')]],
+        ['instB', [createBoxBody('bodyB')]],
+      ]),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.committed).toBe(false);
+    expect(result.updatedInstances.get('instB')?.transform[14]).toBeCloseTo(0);
+    expect(
+      result.updatedInstanceBodies.get('instB')?.[0]?.planes.get('p0')?.origin[2]
+    ).toBeCloseTo(-0.5);
+    expect(result.constraintStatuses.get('mate:broken')?.state).toBe('broken');
+    expect(result.constraintStatuses.get('mate:valid')?.state).toBe('unsatisfied');
+  });
+
+  it('validates migrated legacy constraints without moving either instance', () => {
+    const instanceA = createComponentInstance('comp1', 'Instance A');
+    const instanceB = createComponentInstance('comp1', 'Instance B');
+    instanceA.id = 'instA';
+    instanceB.id = 'instB';
+    const constraint = {
+      id: 'mate:legacy',
+      name: 'Legacy mate',
+      type: 'flush' as const,
+      refA: createInstanceFaceRef('instA', 'f1', 'bodyA'),
+      refB: createInstanceFaceRef('instB', 'f0', 'bodyB'),
+      offset: 0,
+      satisfied: false,
+      suppressed: false,
+      driving: false,
+    };
+
+    const result = solveConstraints({
+      instances: [instanceA, instanceB],
+      constraints: [constraint],
+      instanceBodies: new Map([
+        ['instA', [createBoxBody('bodyA')]],
+        ['instB', [createBoxBody('bodyB')]],
+      ]),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.committed).toBe(true);
+    expect(result.constraintStatuses.get(constraint.id)?.state).toBe('unsatisfied');
+    expect(result.updatedInstances.get('instA')?.transform).toEqual(instanceA.transform);
+    expect(result.updatedInstances.get('instB')?.transform).toEqual(instanceB.transform);
+  });
+
+  it('rejects an unsatisfied mate between two grounded instances without moving them', () => {
+    const instanceA = createComponentInstance('comp1', 'Instance A');
+    const instanceB = createComponentInstance('comp1', 'Instance B');
+    instanceA.id = 'instA';
+    instanceB.id = 'instB';
+    instanceA.grounded = true;
+    instanceB.grounded = true;
+    const constraint = {
+      id: 'mate:grounded',
+      name: 'Grounded mate',
+      type: 'flush' as const,
+      refA: createInstanceFaceRef('instA', 'f1', 'bodyA'),
+      refB: createInstanceFaceRef('instB', 'f0', 'bodyB'),
+      offset: 0,
+      satisfied: false,
+      suppressed: false,
+    };
+
+    const result = solveConstraints({
+      instances: [instanceA, instanceB],
+      constraints: [constraint],
+      instanceBodies: new Map([
+        ['instA', [createBoxBody('bodyA')]],
+        ['instB', [createBoxBody('bodyB')]],
+      ]),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.committed).toBe(false);
+    expect(result.constraintStatuses.get(constraint.id)?.state).toBe('conflicting');
+    expect(result.updatedInstances.get('instA')?.transform).toEqual(instanceA.transform);
+    expect(result.updatedInstances.get('instB')?.transform).toEqual(instanceB.transform);
   });
 });
 

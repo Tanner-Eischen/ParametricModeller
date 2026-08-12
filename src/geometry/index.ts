@@ -73,6 +73,7 @@ export {
   validateBody,
   isManifoldEdge as validateManifoldEdge,
   validateUniqueVertices,
+  validateClosedManifoldBody,
 } from './Validation';
 
 // Triangulator
@@ -82,7 +83,50 @@ export {
   triangulateBody,
   createBufferGeometry,
   createWireframeGeometry,
+  getOrderedLoopVertices,
 } from './Triangulator';
+
+// Deterministic planar regions and restricted same-frame prismatic booleans
+export type {
+  PlanarPoint,
+  PlanarLoop,
+  PlanarRegion,
+  PlanarRegionDiagnosticCode,
+  PlanarRegionDiagnostic,
+  PlanarRegionResult,
+  PlanarTriangulation,
+} from './PlanarRegion';
+export {
+  normalizePlanarRegion,
+  triangulatePlanarRegion,
+  signedPlanarArea,
+  isPointStrictlyInsideRegion,
+  loopsContact,
+} from './PlanarRegion';
+export type {
+  PrismaticFrame,
+  PrismaticBodyDefinition,
+  PrismaticBooleanDiagnosticCode,
+  PrismaticBooleanDiagnostic,
+  PrismaticBooleanResult,
+  PrismaticDifferenceRequest,
+  PrismaticUnionRequest,
+} from './PrismaticBoolean';
+export {
+  createPrismaticBody,
+  differencePrismatic,
+  unionPrismatic,
+  planarRegionArea,
+} from './PrismaticBoolean';
+export type {
+  PlanarBooleanOperation,
+  PlanarBooleanRequest,
+  PlanarBooleanResult,
+  BooleanDiagnosticCode,
+  BooleanDiagnostic,
+  TopologyProvenance,
+} from './PlanarBooleanKernel';
+export { executePlanarBoolean } from './PlanarBooleanKernel';
 
 // Construction Plane (Milestone 02)
 export type { ConstructionPlane } from './ConstructionPlane';
@@ -109,6 +153,16 @@ export {
   offsetFace,
 } from './FaceOffset';
 
+// Deterministic convex planar-body splitting for miter/cross cuts
+export type {
+  PlanarBodySplitDiagnosticCode,
+  PlanarBodySplitFailure,
+  PlanarBodySplitSuccess,
+  PlanarBodySplitResult,
+  PlanarBodySplitOptions,
+} from './PlanarBodySplit';
+export { splitConvexBodyByPlane } from './PlanarBodySplit';
+
 // Cut Builder (Milestone 04)
 export type { CutValidationResult } from './CutBuilder';
 export {
@@ -122,6 +176,7 @@ export {
   translateBody,
   mirrorBody,
   transformVertexPositions,
+  combineBodies,
 } from './TransformUtils';
 
 // Sub-object Types (Milestone 07)
@@ -170,3 +225,44 @@ export {
   isPolygonPlanar,
   distanceFromPlane,
 } from './PlanarityGuard';
+
+// Deterministic geometry snapshots (Phase 0 regression infrastructure)
+export type { GeometryHashOptions, BodyMeasurements } from './GeometryHash';
+export {
+  canonicalizeGeometry,
+  hashGeometry,
+  hashBodyGeometry,
+  measureBody,
+} from './GeometryHash';
+
+// Central numeric policy and deterministic topology allocation (Phase 1)
+export type { TolerancePolicy } from './TolerancePolicy';
+export {
+  DEFAULT_TOLERANCE_POLICY,
+  createTolerancePolicy,
+  approximatelyEqual,
+  quantizeToTolerance,
+} from './TolerancePolicy';
+export type { TopologyEntityKind } from './TopologyIdAllocator';
+export {
+  TopologyIdAllocator,
+  createTopologyId,
+  createTopologyIdAllocator,
+} from './TopologyIdAllocator';
+
+// Right-handed rigid coordinate frames for reference-based placement
+export type {
+  Vector3Tuple,
+  Matrix4Tuple,
+  CoordinateFrame3D,
+} from './CoordinateFrame3D';
+export {
+  createCoordinateFrame3D,
+  createCoordinateFrameFromZAxis,
+  createCoordinateFrameFromXAxis,
+  isRightHandedCoordinateFrame,
+  coordinateFrameToMatrix,
+  coordinateFrameToMatrixTuple,
+  coordinateFrameFromMatrix,
+  transformCoordinateFrame,
+} from './CoordinateFrame3D';

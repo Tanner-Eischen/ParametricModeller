@@ -14,20 +14,18 @@ describe('Snapping', () => {
     it('should snap to nearest grid step', () => {
       expect(snapToGrid(0.5, 0.25)).toBe(0.5);
       expect(snapToGrid(0.4, 0.25)).toBe(0.5);
-      expect(snapToGrid(0.3, 0.25)).toBe(0.3); // 0.25 rounded to 1 decimal = 0.3
+      expect(snapToGrid(0.3, 0.25)).toBe(0.25);
     });
 
     it('should use default grid step if not provided', () => {
       // Default is 1/16 = 0.0625
       expect(snapToGrid(0.5)).toBe(0.5);
-      // Note: 0.1 snaps to 0.125, but toFixed(2) rounds it to 0.13
-      expect(snapToGrid(0.1)).toBe(0.13);
+      expect(snapToGrid(0.1)).toBe(0.125);
     });
 
     it('should handle negative values', () => {
       expect(snapToGrid(-0.4, 0.25)).toBe(-0.5);
-      // Note: -0.25.toFixed(1) rounds to -0.3 due to floating point
-      expect(snapToGrid(-0.2, 0.25)).toBe(-0.3);
+      expect(snapToGrid(-0.2, 0.25)).toBe(-0.25);
     });
 
     it('should return value as-is for non-positive step', () => {
@@ -136,6 +134,11 @@ describe('Snapping', () => {
       if (result.ok) {
         expect(result.value).toBe(0.75);
       }
+    });
+
+    it('delegates arithmetic expressions to the shared numeric parser', () => {
+      const result = parseNumericInput('(1/2 + 1/4) * 2');
+      expect(result).toEqual({ ok: true, value: 1.5 });
     });
 
     it('should parse mixed numbers', () => {

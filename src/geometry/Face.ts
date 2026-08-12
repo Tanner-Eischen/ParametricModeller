@@ -11,6 +11,8 @@ export interface Face {
   planeId: string;
   /** IDs of edges forming the outer boundary (ordered, CCW when viewed from outside) */
   boundaryEdgeIds: string[];
+  /** Ordered edge loops for holes in the face region. */
+  innerBoundaryEdgeIds?: string[][];
   /** Stable name for deterministic topology (e.g., "+X", "-Z") */
   name?: string;
 }
@@ -46,7 +48,8 @@ export function getFaceEdgeCount(face: Face): number {
  * Check if a face contains a specific edge.
  */
 export function faceHasEdge(face: Face, edgeId: string): boolean {
-  return face.boundaryEdgeIds.includes(edgeId);
+  return face.boundaryEdgeIds.includes(edgeId)
+    || (face.innerBoundaryEdgeIds?.some((loop) => loop.includes(edgeId)) ?? false);
 }
 
 /**
@@ -58,5 +61,12 @@ export function replaceEdgeInFace(face: Face, oldEdgeId: string, newEdgeId: stri
     boundaryEdgeIds: face.boundaryEdgeIds.map((id) =>
       id === oldEdgeId ? newEdgeId : id
     ),
+    ...(face.innerBoundaryEdgeIds
+      ? {
+          innerBoundaryEdgeIds: face.innerBoundaryEdgeIds.map((loop) =>
+            loop.map((id) => id === oldEdgeId ? newEdgeId : id)
+          ),
+        }
+      : {}),
   };
 }

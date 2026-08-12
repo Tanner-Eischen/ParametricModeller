@@ -160,16 +160,26 @@ describe('CameraControls', () => {
   });
 
   describe('fitToView', () => {
-    it('should position camera to view the box', () => {
+    it.each(['perspective', 'orthographic'] as const)('frames every box corner with margin in %s', (projection) => {
       const box = new THREE.Box3(
         new THREE.Vector3(-5, -5, -5),
         new THREE.Vector3(5, 5, 5)
       );
 
+      cameraControls.setProjection(projection);
       cameraControls.fitToView(box);
+      cameraControls.update();
+      const camera = cameraControls.camera;
+      camera.updateMatrixWorld(true);
+      const corners = [
+        [-5, -5, -5], [-5, -5, 5], [-5, 5, -5], [-5, 5, 5],
+        [5, -5, -5], [5, -5, 5], [5, 5, -5], [5, 5, 5],
+      ].map(([x, y, z]) => new THREE.Vector3(x, y, z).project(camera));
 
-      // Camera should be positioned to see the box
-      expect(cameraControls.camera.position.length()).toBeGreaterThan(0);
+      for (const corner of corners) {
+        expect(Math.abs(corner.x)).toBeLessThan(0.95);
+        expect(Math.abs(corner.y)).toBeLessThan(0.95);
+      }
     });
   });
 

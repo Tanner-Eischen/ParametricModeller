@@ -1,4 +1,3 @@
-import { generateId } from '../core/id';
 import type { Body } from './Body';
 import { addVertex, addEdge, addFace, addPlane, getBodyBoundingBox } from './Body';
 import type { Plane } from './Plane';
@@ -7,6 +6,8 @@ import type { ConstructionPlane } from './ConstructionPlane';
 import { sketchToWorld } from './ConstructionPlane';
 import type { Profile2D } from '../sketch';
 import { createModuleLogger } from '../core/logger';
+import { createTopologyIdAllocator } from './TopologyIdAllocator';
+import { DEFAULT_TOLERANCE_POLICY } from './TolerancePolicy';
 
 const log = createModuleLogger('CutBuilder');
 
@@ -59,7 +60,7 @@ export function validateCutOperation(
 
   // Check all profile points are within body bounds (simplified)
   for (const point of worldPoints) {
-    const tolerance = 0.001;
+    const tolerance = DEFAULT_TOLERANCE_POLICY.operationBounds;
     if (
       point[0] < bbox.min[0] - tolerance ||
       point[0] > bbox.max[0] + tolerance ||
@@ -112,7 +113,7 @@ export function computeThroughCutDepth(
       continue;
     }
 
-    if (Math.abs(cutDirI) < 1e-6) {
+    if (Math.abs(cutDirI) < DEFAULT_TOLERANCE_POLICY.angular) {
       // Ray parallel to slab
       if (originI < minI || originI > maxI) {
         return null;
@@ -131,7 +132,7 @@ export function computeThroughCutDepth(
   }
 
   // Through cut depth is from entry to exit
-  const throughDepth = tMax - tMin + 0.01; // Add small buffer
+  const throughDepth = tMax - tMin + DEFAULT_TOLERANCE_POLICY.throughAllExtension;
 
   if (throughDepth <= 0) {
     return null;
@@ -154,7 +155,8 @@ export function performCut(
   plane: ConstructionPlane,
   profile: Profile2D,
   distance: number,
-  flip: boolean
+  flip: boolean,
+  operationId: string
 ): Body | null {
   try {
     // Determine cut direction
@@ -175,7 +177,8 @@ export function performCut(
     const numPoints = topPoints3D.length;
 
     // Generate IDs for new topology
-    const cutId = generateId();
+    const allocator = createTopologyIdAllocator(`${body.id}:cut:${operationId}:${profile.id}`);
+    const cutId = allocator.body('pocket');
     const topVertexIds: string[] = [];
     const bottomVertexIds: string[] = [];
     const topEdgeIds: string[] = [];
@@ -185,7 +188,7 @@ export function performCut(
 
     // Create top vertices (on sketch plane)
     for (let i = 0; i < numPoints; i++) {
-      const id = `cut_${cutId}_top_v${i}`;
+      const id = allocator.vertex(`top:${i}`);
       addVertex(body, {
         id,
         position: topPoints3D[i]!,
@@ -196,7 +199,7 @@ export function performCut(
 
     // Create bottom vertices (at cut depth)
     for (let i = 0; i < numPoints; i++) {
-      const id = `cut_${cutId}_bottom_v${i}`;
+      const id = allocator.vertex(`bottom:${i}`);
       addVertex(body, {
         id,
         position: bottomPoints3D[i]!,
@@ -223,14 +226,14 @@ export function performCut(
       uAxis: plane.uAxis,
       vAxis: plane.vAxis,
     };
-    const bottomPlaneId = `cut_${cutId}_bottom`;
+    const bottomPlaneId = allocator.plane('bottom');
     addPlane(body, bottomPlane, bottomPlaneId);
 
     // Create side planes
     for (let i = 0; i < numPoints; i++) {
       const next = (i + 1) % numPoints;
 
-      const sidePlaneId = `cut_${cutId}_side_plane_${i}`;
+      const sidePlaneId = allocator.plane(`side:${i}`);
       const p1Top = topPoints3D[i]!;
       const p2Top = topPoints3D[next]!;
 
@@ -251,7 +254,7 @@ export function performCut(
     // Create top edges (cut profile boundary)
     for (let i = 0; i < numPoints; i++) {
       const next = (i + 1) % numPoints;
-      const id = `cut_${cutId}_top_e${i}`;
+      const id = allocator.edge(`top:${i}`);
       addEdge(body, {
         id,
         vertexIds: [topVertexIds[i]!, topVertexIds[next]!],
@@ -263,7 +266,7 @@ export function performCut(
     // Create bottom edges
     for (let i = 0; i < numPoints; i++) {
       const next = (i + 1) % numPoints;
-      const id = `cut_${cutId}_bottom_e${i}`;
+      const id = allocator.edge(`bottom:${i}`);
       addEdge(body, {
         id,
         vertexIds: [bottomVertexIds[i]!, bottomVertexIds[next]!],
@@ -274,7 +277,7 @@ export function performCut(
 
     // Create vertical edges
     for (let i = 0; i < numPoints; i++) {
-      const id = `cut_${cutId}_vertical_e${i}`;
+      const id = allocator.edge(`vertical:${i}`);
       addEdge(body, {
         id,
         vertexIds: [topVertexIds[i]!, bottomVertexIds[i]!],
@@ -285,7 +288,7 @@ export function performCut(
 
     // Create bottom face of pocket
     addFace(body, {
-      id: `cut_${cutId}_bottom`,
+      id: allocator.face('bottom'),
       planeId: bottomPlaneId,
       boundaryEdgeIds: bottomEdgeIds,
       name: 'Cut Bottom',
@@ -294,7 +297,7 @@ export function performCut(
     // Create side faces of pocket
     for (let i = 0; i < numPoints; i++) {
       const next = (i + 1) % numPoints;
-      const faceId = `cut_${cutId}_side_${i}`;
+      const faceId = allocator.face(`side:${i}`);
 
       // Side face edges: vertical, bottom, vertical, top
       const sideEdges = [

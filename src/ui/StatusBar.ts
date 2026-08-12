@@ -16,12 +16,25 @@ export class StatusBar {
     this.centerSection = this._container.querySelector('#status-center') as HTMLElement;
     this.rightSection = this._container.querySelector('#status-right') as HTMLElement;
 
+    this.leftSection.setAttribute('role', 'status');
+    this.leftSection.setAttribute('aria-live', 'polite');
+    this.leftSection.setAttribute('aria-atomic', 'true');
+    this.leftSection.setAttribute('aria-label', 'Application status');
+    this.centerSection.setAttribute('aria-live', 'polite');
+    this.centerSection.setAttribute('aria-atomic', 'true');
+    this.centerSection.setAttribute('aria-label', 'Selection status');
+    this.rightSection.setAttribute('aria-label', 'Document units');
+
     this.setupEventListeners();
     log.debug('StatusBar initialized');
   }
 
   private setupEventListeners(): void {
-    eventBus.on('ui:status', ({ message }) => {
+    eventBus.on('ui:status', ({ message, announce }) => {
+      if (announce === false) {
+        this.setVisualMessage(message);
+        return;
+      }
       this.setMessage(message);
     });
 
@@ -48,6 +61,12 @@ export class StatusBar {
 
   setMessage(message: string): void {
     this.setLeftMessage(message);
+  }
+
+  private setVisualMessage(message: string): void {
+    this.leftSection.setAttribute('aria-live', 'off');
+    this.leftSection.textContent = message;
+    queueMicrotask(() => this.leftSection.setAttribute('aria-live', 'polite'));
   }
 
   setUnits(units: 'inch' | 'mm'): void {

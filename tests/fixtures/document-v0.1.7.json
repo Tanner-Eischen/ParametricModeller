@@ -1,0 +1,76 @@
+{
+  "version": "0.1.7",
+  "metadata": {
+    "name": "Legacy Workbench",
+    "created": "2025-01-01T00:00:00.000Z",
+    "modified": "2025-02-01T00:00:00.000Z"
+  },
+  "config": {
+    "units": "mm",
+    "gridSpacing": { "major": 100, "minor": 10 },
+    "snapEnabled": true
+  },
+  "bodies": [
+    {
+      "id": "body-1",
+      "name": "Leg",
+      "type": "solid",
+      "transform": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+      "visible": false,
+      "locked": true
+    }
+  ],
+  "features": [
+    {
+      "id": "feature-1",
+      "type": "box",
+      "name": "Leg blank",
+      "parameters": { "width": 40, "depth": 40, "height": 700 },
+      "suppressed": false,
+      "refsIn": [],
+      "refsOut": ["body-1"]
+    }
+  ],
+  "components": [
+    {
+      "id": "component-1",
+      "name": "Leg component",
+      "featureIds": ["feature-1"],
+      "bodyIds": ["body-1"],
+      "visible": false,
+      "locked": true
+    }
+  ],
+  "componentInstances": [
+    {
+      "id": "instance-1",
+      "componentId": "component-1",
+      "name": "Leg instance",
+      "transform": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 500, 0, 0, 1],
+      "lockedAxes": {
+        "translateX": false,
+        "translateY": false,
+        "translateZ": false,
+        "rotateX": false,
+        "rotateY": false,
+        "rotateZ": false
+      },
+      "grounded": false,
+      "visible": true,
+      "locked": false
+    }
+  ],
+  "constraints": [],
+  "activeComponentId": "component-1",
+  "bodyPresentations": {
+    "body-1": { "name": "Front left leg", "visible": false, "locked": true }
+  },
+  "bodyMetadata": {
+    "body-1": {
+      "material": "white-oak",
+      "grainAxis": "z",
+      "legacySupplierCode": "WO-SELECT"
+    }
+  },
+  "pluginData": { "fixtureMarker": "preserve-me" }
+}

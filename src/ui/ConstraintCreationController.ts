@@ -11,6 +11,7 @@
 
 import { createModuleLogger } from '../core/logger';
 import { eventBus } from '../core';
+import { parseNumericInput, resolveNumericInput } from '../interaction';
 import {
   createMateConstraint,
   createInstanceFaceRef,
@@ -24,14 +25,15 @@ const log = createModuleLogger('ConstraintCreationController');
 /**
  * Constraint creation mode.
  */
-export type ConstraintCreationMode = 'idle' | 'selectFaceA' | 'selectFaceB' | 'enterOffset';
+export type ConstraintCreationMode = 'idle' | 'selectFaceA' | 'selectFaceB' | 'enterOffset' | 'ready';
 
 /**
  * Options for the ConstraintCreationController.
  */
 export interface ConstraintCreationControllerOptions {
   instances: () => ComponentInstance[];
-  onConstraintCreated: (constraint: MateConstraint) => void;
+  resolveInstanceIdForBody?: (bodyId: string) => string | null;
+  onConstraintCreated: (constraint: MateConstraint) => boolean | void;
 }
 
 /**
@@ -39,7 +41,10 @@ export interface ConstraintCreationControllerOptions {
  */
 export class ConstraintCreationController {
   private instances: () => ComponentInstance[];
-  private onConstraintCreated: (constraint: MateConstraint) => void;
+  private onConstraintCreated: (constraint: MateConstraint) => boolean | void;
+  private readonly resolveInstanceIdForBody:
+    | ((bodyId: string) => string | null)
+    | undefined;
 
   private mode: ConstraintCreationMode = 'idle';
   private constraintType: 'flush' | 'offset' = 'flush';
@@ -50,6 +55,7 @@ export class ConstraintCreationController {
   constructor(options: ConstraintCreationControllerOptions) {
     this.instances = options.instances;
     this.onConstraintCreated = options.onConstraintCreated;
+    this.resolveInstanceIdForBody = options.resolveInstanceIdForBody;
     this.setupEventListeners();
     log.debug('ConstraintCreationController initialized');
   }
@@ -64,24 +70,24 @@ export class ConstraintCreationController {
   /**
    * Start creating a flush constraint.
    */
-  startFlushConstraint(): void {
-    this.startConstraint('flush');
+  startFlushConstraint(): boolean {
+    return this.startConstraint('flush');
   }
 
   /**
    * Start creating an offset constraint.
    */
-  startOffsetConstraint(): void {
-    this.startConstraint('offset');
+  startOffsetConstraint(): boolean {
+    return this.startConstraint('offset');
   }
 
   /**
    * Start constraint creation.
    */
-  private startConstraint(type: 'flush' | 'offset'): void {
+  private startConstraint(type: 'flush' | 'offset'): boolean {
     if (this.instances().length < 2) {
       eventBus.emit('ui:status', { message: 'Need at least 2 instances to create a constraint' });
-      return;
+      return false;
     }
 
     this.mode = 'selectFaceA';
@@ -96,6 +102,7 @@ export class ConstraintCreationController {
     });
 
     log.debug('Started constraint creation', { type });
+    return true;
   }
 
   /**
@@ -104,11 +111,8 @@ export class ConstraintCreationController {
   private handleFaceSelection(faceId: string, bodyId: string): void {
     if (this.mode === 'idle') return;
 
-    // Find the instance that contains this body
-    const instance = this.instances().find(inst => {
-      // Check if bodyId starts with or matches expected pattern
-      return bodyId.includes(inst.id) || inst.id === this.extractInstanceIdFromBodyId(bodyId);
-    });
+    const resolvedInstanceId = this.resolveInstanceIdForBody?.(bodyId) ?? null;
+    const instance = this.instances().find((candidate) => candidate.id === resolvedInstanceId);
 
     if (!instance) {
       eventBus.emit('ui:status', { message: 'Selected face is not part of any instance' });
@@ -139,18 +143,9 @@ export class ConstraintCreationController {
         this.mode = 'enterOffset';
         this.promptForOffset();
       } else {
-        this.createConstraint();
+        this.markReady();
       }
     }
-  }
-
-  /**
-   * Extract instance ID from body ID.
-   * Body IDs are formatted as: {sourceBodyId}_{instanceId}
-   */
-  private extractInstanceIdFromBodyId(bodyId: string): string {
-    const parts = bodyId.split('_');
-    return parts.length > 1 ? parts[parts.length - 1]! : '';
   }
 
   /**
@@ -163,24 +158,41 @@ export class ConstraintCreationController {
       return;
     }
 
-    const offset = parseFloat(input);
-    if (isNaN(offset) || offset < 0) {
-      eventBus.emit('ui:status', { message: 'Invalid offset value' });
+    const parsed = parseNumericInput(input);
+    if (!parsed.ok) {
+      eventBus.emit('ui:status', {
+        message: `Invalid offset value: ${parsed.error}`,
+      });
       this.cancel();
       return;
     }
 
-    this.pendingOffset = offset;
-    this.createConstraint();
+    this.pendingOffset = resolveNumericInput(this.pendingOffset, parsed);
+    this.markReady();
+  }
+
+  private markReady(): void {
+    this.mode = 'ready';
+    eventBus.emit('ui:status', {
+      message: 'Constraint preview ready - press Enter to commit or Escape to cancel',
+    });
+  }
+
+  commit(): boolean {
+    if (this.mode !== 'ready') {
+      eventBus.emit('ui:status', { message: 'Select both constraint faces before committing' });
+      return false;
+    }
+    return this.createConstraint();
   }
 
   /**
    * Create the constraint.
    */
-  private createConstraint(): void {
+  private createConstraint(): boolean {
     if (!this.refA || !this.refB) {
       this.cancel();
-      return;
+      return false;
     }
 
     const constraint = createMateConstraint(
@@ -198,7 +210,9 @@ export class ConstraintCreationController {
       refB: this.refB.instanceId,
     });
 
-    this.onConstraintCreated(constraint);
+    if (this.onConstraintCreated(constraint) === false) {
+      return false;
+    }
     this.reset();
 
     eventBus.emit('constraint:added', {
@@ -209,6 +223,7 @@ export class ConstraintCreationController {
     eventBus.emit('ui:status', {
       message: `Created ${constraint.type} mate`,
     });
+    return true;
   }
 
   /**

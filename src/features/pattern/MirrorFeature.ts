@@ -9,10 +9,11 @@ import type { FeatureRecord } from '../FeatureRecord';
 import type { RebuildContext } from '../RebuildContext';
 import type { RebuildHandlerResult } from '../RebuildEngine';
 import { getBodyByFeature } from '../RebuildContext';
-import { mirrorBody, type Body, type Plane, createXYPlane, createXZPlane, createYZPlane } from '../../geometry';
-import type { PlaneRef } from '../../sketch';
+import { mirrorBody, type Plane, createXYPlane, createXZPlane, createYZPlane } from '../../geometry';
+import { createWorldPlaneRef, type PlaneRef } from '../../sketch';
 import { getConstructionPlaneFromRef } from '../../geometry/ConstructionPlane';
 import { createModuleLogger } from '../../core/logger';
+import type { BodyRef } from '../../geometry/SubObjectTypes';
 
 const log = createModuleLogger('MirrorFeature');
 
@@ -22,6 +23,8 @@ const log = createModuleLogger('MirrorFeature');
 export interface MirrorParams {
   /** ID of the source feature to mirror */
   sourceFeatureId: string;
+  /** Exact source body. Optional only for legacy documents. */
+  sourceBodyRef?: BodyRef;
   /** Mirror plane reference (world or face-based) */
   planeRef: PlaneRef;
 }
@@ -31,11 +34,7 @@ export interface MirrorParams {
  */
 export const defaultMirrorParams: MirrorParams = {
   sourceFeatureId: '',
-  planeRef: {
-    type: 'world',
-    worldPlane: 'yz',
-    offset: 0,
-  },
+  planeRef: createWorldPlaneRef('yz', 0),
 };
 
 /**
@@ -64,6 +63,17 @@ export function validateMirrorParams(params: Partial<MirrorParams>): Diagnostic[
     }
   }
 
+  if (params.sourceBodyRef && (
+    !params.sourceBodyRef.featureId
+    || !params.sourceBodyRef.bodyId
+    || params.sourceBodyRef.featureId !== params.sourceFeatureId
+  )) {
+    diagnostics.push(error(
+      'INVALID_SOURCE_REF',
+      'Source body reference must contain the same feature ID and a body ID'
+    ));
+  }
+
   return diagnostics;
 }
 
@@ -90,10 +100,7 @@ export function rebuildMirror(
   feature: FeatureRecord,
   context: RebuildContext
 ): RebuildHandlerResult {
-  const params: MirrorParams = {
-    ...defaultMirrorParams,
-    ...(feature.parameters as Partial<MirrorParams>),
-  };
+  const params = migrateMirrorParams(feature.parameters as Partial<MirrorParams>);
 
   // Validate parameters
   const diagnostics = validateMirrorParams(params);
@@ -106,7 +113,11 @@ export function rebuildMirror(
   }
 
   // Get the source body
-  const sourceBody = getBodyByFeature(context, params.sourceFeatureId);
+  const sourceBody = params.sourceBodyRef
+    ? context.bodiesByFeature
+      .get(params.sourceBodyRef.featureId)
+      ?.find((body) => body.id === params.sourceBodyRef!.bodyId)
+    : getBodyByFeature(context, params.sourceFeatureId);
 
   if (!sourceBody) {
     return {
@@ -129,7 +140,11 @@ export function rebuildMirror(
     );
   } else {
     // Face-based plane
-    const resolvedPlane = getConstructionPlaneFromRef(params.planeRef, allBodies);
+    const resolvedPlane = getConstructionPlaneFromRef(
+      params.planeRef,
+      allBodies,
+      context.bodiesByFeature
+    );
     if (!resolvedPlane) {
       return {
         ok: false,
@@ -141,7 +156,7 @@ export function rebuildMirror(
   }
 
   // Create mirrored instance
-  const instanceId = `${sourceBody.id}_mirror`;
+  const instanceId = `${sourceBody.id}_${feature.id}_mirror`;
   const mirroredInstance = mirrorBody(sourceBody, mirrorPlane, instanceId);
   mirroredInstance.name = `${sourceBody.name}_mirror`;
 
@@ -162,12 +177,14 @@ export function rebuildMirror(
  * Create a mirror feature record.
  */
 export function createMirrorFeature(
-  sourceFeatureId: string,
+  source: string | BodyRef,
   planeRef: PlaneRef,
   name = 'Mirror'
 ): FeatureRecord {
+  const sourceFeatureId = typeof source === 'string' ? source : source.featureId;
   const params: MirrorParams = {
     sourceFeatureId,
+    ...(typeof source === 'string' ? {} : { sourceBodyRef: { ...source } }),
     planeRef,
   };
 
@@ -176,7 +193,10 @@ export function createMirrorFeature(
     type: MIRROR_FEATURE_TYPE,
     name,
     parameters: params as unknown as Record<string, unknown>,
-    refsIn: [sourceFeatureId],
+    refsIn: [...new Set([
+      sourceFeatureId,
+      ...(planeRef.type === 'face' && planeRef.featureId ? [planeRef.featureId] : []),
+    ])],
     refsOut: [],
     suppressed: false,
   };
@@ -206,5 +226,19 @@ export function updateMirrorPlaneRef(
  */
 export function getMirrorParams(feature: FeatureRecord): MirrorParams | null {
   if (feature.type !== MIRROR_FEATURE_TYPE) return null;
-  return feature.parameters as unknown as MirrorParams;
+  return migrateMirrorParams(feature.parameters as Partial<MirrorParams>);
+}
+
+/** Preserve legacy sourceFeatureId-only documents while preferring exact body refs. */
+export function migrateMirrorParams(params: Partial<MirrorParams>): MirrorParams {
+  const sourceFeatureId = params.sourceBodyRef?.featureId
+    ?? params.sourceFeatureId
+    ?? defaultMirrorParams.sourceFeatureId;
+  return {
+    sourceFeatureId,
+    ...(params.sourceBodyRef ? { sourceBodyRef: { ...params.sourceBodyRef } } : {}),
+    planeRef: params.planeRef
+      ? { ...params.planeRef }
+      : { ...defaultMirrorParams.planeRef },
+  };
 }

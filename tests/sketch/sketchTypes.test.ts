@@ -43,11 +43,17 @@ describe('SketchTypes', () => {
 
   describe('createFacePlaneRef', () => {
     it('should create a face plane reference', () => {
-      const ref = createFacePlaneRef('face-1', 'body-1');
+      const ref = createFacePlaneRef('face-1', 'body-1', 'feature-1');
       expect(ref.type).toBe('face');
       expect(ref.faceId).toBe('face-1');
       expect(ref.bodyId).toBe('body-1');
+      expect(ref.featureId).toBe('feature-1');
       expect(ref.id).toBeDefined();
+    });
+
+    it('keeps legacy body-only face references readable', () => {
+      const ref = createFacePlaneRef('face-1', 'body-1');
+      expect(ref.featureId).toBeUndefined();
     });
   });
 
@@ -209,6 +215,24 @@ describe('SketchTypes', () => {
       expect(deserialized.entities).toHaveLength(1);
       expect(deserialized.planeRef.worldPlane).toBe('xy');
       expect(deserialized.planeRef.offset).toBe(2);
+    });
+
+    it('round-trips face ownership', () => {
+      const sketch = createSketch(
+        createFacePlaneRef('face-1', 'body-1', 'feature-1'),
+        'Face sketch'
+      );
+
+      const deserialized = deserializeSketch(
+        serializeSketch(sketch) as Parameters<typeof deserializeSketch>[0]
+      );
+
+      expect(deserialized.planeRef).toMatchObject({
+        type: 'face',
+        faceId: 'face-1',
+        bodyId: 'body-1',
+        featureId: 'feature-1',
+      });
     });
   });
 });

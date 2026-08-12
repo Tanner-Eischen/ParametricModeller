@@ -5,8 +5,8 @@
 
 import { error, type Diagnostic } from '../Diagnostics';
 import type { FeatureRecord } from '../FeatureRecord';
-import type { RebuildContext, RebuildHandlerResult } from '../RebuildEngine';
-import { getAllBodies } from '../RebuildContext';
+import type { RebuildHandlerResult } from '../RebuildEngine';
+import { getAllBodies, type RebuildContext } from '../RebuildContext';
 import { cloneBody, type Body } from '../../geometry';
 import { validateBody } from '../../geometry/Validation';
 import type { VertexRef } from '../../geometry/SubObjectTypes';
@@ -43,7 +43,6 @@ export const defaultMoveVertexParams: MoveVertexParams = {
   vertexRef: { featureId: '', bodyId: '', vertexId: '' },
   translation: [0, 0, 0],
   constrainToPlane: false,
-  constrainAxis: undefined,
 };
 
 /**
@@ -214,7 +213,7 @@ export function rebuildMoveVertex(
   if (params.constrainAxis) {
     const axisIndex = { x: 0, y: 1, z: 2 }[params.constrainAxis]!;
     const axis: [number, number, number] = [0, 0, 0];
-    axis[axisIndex] = params.translation[axisIndex];
+    axis[axisIndex] = params.translation[axisIndex] ?? 0;
     finalTranslation = axis;
   }
 
@@ -241,5 +240,6 @@ export function rebuildMoveVertex(
     ok: true,
     bodies: [modifiedBody],
     diagnostics: [],
+    replacedBodyIds: [targetBody.id],
   };
 }

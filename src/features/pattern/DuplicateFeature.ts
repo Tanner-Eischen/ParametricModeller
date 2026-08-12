@@ -9,8 +9,9 @@ import type { FeatureRecord } from '../FeatureRecord';
 import type { RebuildContext } from '../RebuildContext';
 import type { RebuildHandlerResult } from '../RebuildEngine';
 import { getBodyByFeature } from '../RebuildContext';
-import { translateBody, type Body } from '../../geometry';
+import { translateBody } from '../../geometry';
 import { createModuleLogger } from '../../core/logger';
+import type { BodyRef } from '../../geometry/SubObjectTypes';
 
 const log = createModuleLogger('DuplicateFeature');
 
@@ -20,6 +21,8 @@ const log = createModuleLogger('DuplicateFeature');
 export interface DuplicateParams {
   /** ID of the source feature to duplicate */
   sourceFeatureId: string;
+  /** Exact source body. Optional only for legacy documents. */
+  sourceBodyRef?: BodyRef;
   /** Translation offset for the duplicate */
   translation: [number, number, number];
 }
@@ -49,6 +52,19 @@ export function validateDuplicateParams(params: Partial<DuplicateParams>): Diagn
 
   if (!params.translation || params.translation.length !== 3) {
     diagnostics.push(error('INVALID_TRANSLATION', 'Translation must be [x, y, z]'));
+  } else if (!params.translation.every(Number.isFinite)) {
+    diagnostics.push(error('INVALID_TRANSLATION', 'Translation values must be finite'));
+  }
+
+  if (params.sourceBodyRef && (
+    !params.sourceBodyRef.featureId
+    || !params.sourceBodyRef.bodyId
+    || params.sourceBodyRef.featureId !== params.sourceFeatureId
+  )) {
+    diagnostics.push(error(
+      'INVALID_SOURCE_REF',
+      'Source body reference must contain the same feature ID and a body ID'
+    ));
   }
 
   return diagnostics;
@@ -61,10 +77,7 @@ export function rebuildDuplicate(
   feature: FeatureRecord,
   context: RebuildContext
 ): RebuildHandlerResult {
-  const params: DuplicateParams = {
-    ...defaultDuplicateParams,
-    ...(feature.parameters as Partial<DuplicateParams>),
-  };
+  const params = migrateDuplicateParams(feature.parameters as Partial<DuplicateParams>);
 
   // Validate parameters
   const diagnostics = validateDuplicateParams(params);
@@ -77,7 +90,11 @@ export function rebuildDuplicate(
   }
 
   // Get the source body
-  const sourceBody = getBodyByFeature(context, params.sourceFeatureId);
+  const sourceBody = params.sourceBodyRef
+    ? context.bodiesByFeature
+      .get(params.sourceBodyRef.featureId)
+      ?.find((body) => body.id === params.sourceBodyRef!.bodyId)
+    : getBodyByFeature(context, params.sourceFeatureId);
 
   if (!sourceBody) {
     return {
@@ -89,7 +106,7 @@ export function rebuildDuplicate(
 
   // Create translated copy
   const [tx, ty, tz] = params.translation;
-  const instanceId = `${sourceBody.id}_dup`;
+  const instanceId = `${sourceBody.id}_${feature.id}_dup`;
   const duplicatedBody = translateBody(sourceBody, [tx, ty, tz], instanceId);
   duplicatedBody.name = `${sourceBody.name} (copy)`;
 
@@ -110,12 +127,14 @@ export function rebuildDuplicate(
  * Create a duplicate feature record.
  */
 export function createDuplicateFeature(
-  sourceFeatureId: string,
+  source: string | BodyRef,
   translation: [number, number, number] = [0, 0, 0],
   name = 'Duplicate'
 ): FeatureRecord {
+  const sourceFeatureId = typeof source === 'string' ? source : source.featureId;
   const params: DuplicateParams = {
     sourceFeatureId,
+    ...(typeof source === 'string' ? {} : { sourceBodyRef: { ...source } }),
     translation,
   };
 
@@ -154,5 +173,21 @@ export function updateDuplicateTranslation(
  */
 export function getDuplicateParams(feature: FeatureRecord): DuplicateParams | null {
   if (feature.type !== DUPLICATE_FEATURE_TYPE) return null;
-  return feature.parameters as unknown as DuplicateParams;
+  return migrateDuplicateParams(feature.parameters as Partial<DuplicateParams>);
+}
+
+/** Preserve legacy sourceFeatureId-only documents while preferring exact body refs. */
+export function migrateDuplicateParams(
+  params: Partial<DuplicateParams>
+): DuplicateParams {
+  const sourceFeatureId = params.sourceBodyRef?.featureId
+    ?? params.sourceFeatureId
+    ?? defaultDuplicateParams.sourceFeatureId;
+  return {
+    sourceFeatureId,
+    ...(params.sourceBodyRef ? { sourceBodyRef: { ...params.sourceBodyRef } } : {}),
+    translation: params.translation
+      ? [...params.translation] as [number, number, number]
+      : [...defaultDuplicateParams.translation],
+  };
 }

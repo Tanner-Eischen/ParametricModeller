@@ -14,7 +14,7 @@ describe('PlanarityGuard', () => {
     });
 
     it('should return true for planar rectangles on XY plane', () => {
-      const rect = [
+      const rect: [number, number, number][] = [
         [0, 0, 0],
         [1, 0, 0],
         [1, 1, 0],
@@ -24,7 +24,7 @@ describe('PlanarityGuard', () => {
     });
 
     it('should return true for planar rectangles on XZ plane', () => {
-      const rect = [
+      const rect: [number, number, number][] = [
         [0, 0, 0],
         [1, 0, 0],
         [1, 0, 1],
@@ -34,7 +34,7 @@ describe('PlanarityGuard', () => {
     });
 
     it('should return true for planar rectangles on YZ plane', () => {
-      const rect = [
+      const rect: [number, number, number][] = [
         [0, 0, 0],
         [0, 1, 0],
         [0, 1, 1],
@@ -44,7 +44,7 @@ describe('PlanarityGuard', () => {
     });
 
     it('should return true for planar pentagon', () => {
-      const pentagon = [
+      const pentagon: [number, number, number][] = [
         [0, 0, 0],
         [1, 0, 0],
         [1.5, 1, 0],
@@ -55,7 +55,7 @@ describe('PlanarityGuard', () => {
     });
 
     it('should return true for planar hexagon', () => {
-      const hexagon = [
+      const hexagon: [number, number, number][] = [
         [1, 0, 0],
         [0.5, 0.866, 0],
         [-0.5, 0.866, 0],
@@ -67,7 +67,7 @@ describe('PlanarityGuard', () => {
     });
 
     it('should return false for non-planar quadrilateral', () => {
-      const nonPlanar = [
+      const nonPlanar: [number, number, number][] = [
         [0, 0, 0],
         [1, 0, 0],
         [1, 1, 0.5], // Lifted out of plane
@@ -77,7 +77,7 @@ describe('PlanarityGuard', () => {
     });
 
     it('should return false for significantly non-planar polygon', () => {
-      const nonPlanar = [
+      const nonPlanar: [number, number, number][] = [
         [0, 0, 0],
         [1, 0, 0],
         [1, 1, 0],
@@ -88,7 +88,7 @@ describe('PlanarityGuard', () => {
     });
 
     it('should use tolerance parameter', () => {
-      const slightlyNonPlanar = [
+      const slightlyNonPlanar: [number, number, number][] = [
         [0, 0, 0],
         [1, 0, 0],
         [1, 1, 0.0005], // Slightly out of plane
@@ -102,7 +102,7 @@ describe('PlanarityGuard', () => {
 
     it('should return true for coplanar points on arbitrary plane', () => {
       // Points on a tilted plane (z = x + y)
-      const coplanar = [
+      const coplanar: [number, number, number][] = [
         [0, 0, 0],
         [1, 0, 1],
         [1, 1, 2],

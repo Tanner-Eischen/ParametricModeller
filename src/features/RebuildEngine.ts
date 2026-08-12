@@ -1,11 +1,19 @@
 import { createModuleLogger } from '../core/logger';
 import type { Body } from '../geometry';
 import type { Diagnostic } from './Diagnostics';
+import { error } from './Diagnostics';
 import type { FeatureRecord } from './FeatureRecord';
+import { createDependencyGraph } from './DependencyGraph';
+import {
+  createBodyOutput,
+  getFeatureOutputId,
+  type FeatureOutput,
+} from './FeatureReferences';
 import {
   createRebuildContext,
   setCurrentFeature,
   registerBodies,
+  registerFeatureOutputs,
   getAllBodies,
   type RebuildContext,
 } from './RebuildContext';
@@ -24,7 +32,13 @@ export type FeatureRebuildHandler = (
  * Result from a feature rebuild handler.
  */
 export type RebuildHandlerResult =
-  | { ok: true; bodies: Body[]; diagnostics: Diagnostic[] }
+  | {
+      ok: true;
+      bodies: Body[];
+      diagnostics: Diagnostic[];
+      outputs?: FeatureOutput[];
+      replacedBodyIds?: string[];
+    }
   | { ok: false; error: string; diagnostics: Diagnostic[] };
 
 /**
@@ -41,8 +55,27 @@ export interface RebuildEngine {
  * Result of a full rebuild operation.
  */
 export type RebuildResult =
-  | { ok: true; bodies: Body[]; diagnostics: Diagnostic[] }
-  | { ok: false; error: string; featureId: string; diagnostics: Diagnostic[] };
+  | {
+      ok: true;
+      bodies: Body[];
+      diagnostics: Diagnostic[];
+      outputsByFeature: Map<string, string[]>;
+      /** Isolated geometry snapshots captured when each feature rebuilt. */
+      bodiesByFeature: Map<string, Body[]>;
+      /** Latest feature that emitted each stable body ID. */
+      featureByBodyId: Map<string, string>;
+    }
+  | {
+      ok: false;
+      error: string;
+      featureId: string;
+      diagnostics: Diagnostic[];
+      outputsByFeature: Map<string, string[]>;
+      /** Isolated snapshots from successful features preceding the failure. */
+      bodiesByFeature: Map<string, Body[]>;
+      /** Latest successful feature that emitted each stable body ID. */
+      featureByBodyId: Map<string, string>;
+    };
 
 /**
  * Create a new rebuild engine.
@@ -59,7 +92,27 @@ export function createRebuildEngine(): RebuildEngine {
     rebuild(features: FeatureRecord[]): RebuildResult {
       log.info('Starting rebuild', { featureCount: features.length });
 
-      let context = createRebuildContext();
+      const bodiesByFeature = new Map<string, Body[]>();
+      const featureByBodyId = new Map<string, string>();
+      const dependencyGraph = createDependencyGraph(features);
+      if (dependencyGraph.diagnostics.length > 0) {
+        const firstDiagnostic = dependencyGraph.diagnostics[0]!;
+        log.error('Dependency graph validation failed', {
+          code: firstDiagnostic.code,
+          featureId: firstDiagnostic.featureId,
+        });
+        return {
+          ok: false,
+          error: firstDiagnostic.message,
+          featureId: firstDiagnostic.featureId ?? '',
+          diagnostics: dependencyGraph.diagnostics,
+          outputsByFeature: new Map(),
+          bodiesByFeature,
+          featureByBodyId,
+        };
+      }
+
+      let context = createRebuildContext(features);
       const allDiagnostics: Diagnostic[] = [];
 
       for (const feature of features) {
@@ -79,7 +132,13 @@ export function createRebuildEngine(): RebuildEngine {
             ok: false,
             error: errorMsg,
             featureId: feature.id,
-            diagnostics: allDiagnostics,
+            diagnostics: [
+              ...allDiagnostics,
+              error('UNKNOWN_FEATURE_TYPE', errorMsg, feature.id),
+            ],
+            outputsByFeature: collectOutputIds(context.outputsByFeature),
+            bodiesByFeature,
+            featureByBodyId,
           };
         }
 
@@ -98,10 +157,22 @@ export function createRebuildEngine(): RebuildEngine {
               error: result.error,
               featureId: feature.id,
               diagnostics: allDiagnostics,
+              outputsByFeature: collectOutputIds(context.outputsByFeature),
+              bodiesByFeature,
+              featureByBodyId,
             };
           }
 
-          context = registerBodies(context, feature.id, result.bodies);
+          const bodySnapshots = result.bodies.map(cloneBodySnapshot);
+          bodiesByFeature.set(feature.id, bodySnapshots);
+          for (const body of bodySnapshots) {
+            featureByBodyId.set(body.id, feature.id);
+          }
+          context = registerBodies(context, feature.id, result.bodies, result.replacedBodyIds ?? []);
+          context = registerFeatureOutputs(context, feature.id, [
+            ...result.bodies.map((body) => createBodyOutput(feature.id, body)),
+            ...(result.outputs ?? []),
+          ]);
           log.debug('Feature rebuilt successfully', {
             featureId: feature.id,
             bodyCount: result.bodies.length,
@@ -117,6 +188,9 @@ export function createRebuildEngine(): RebuildEngine {
             error: errorMsg,
             featureId: feature.id,
             diagnostics: allDiagnostics,
+            outputsByFeature: collectOutputIds(context.outputsByFeature),
+            bodiesByFeature,
+            featureByBodyId,
           };
         }
       }
@@ -128,7 +202,80 @@ export function createRebuildEngine(): RebuildEngine {
         ok: true,
         bodies,
         diagnostics: allDiagnostics,
+        outputsByFeature: collectOutputIds(context.outputsByFeature),
+        bodiesByFeature,
+        featureByBodyId,
       };
     },
   };
+}
+
+/**
+ * Capture feature output geometry without retaining mutable arrays or map
+ * entries that a downstream direct-edit feature could share.
+ */
+function cloneBodySnapshot(body: Body): Body {
+  return {
+    id: body.id,
+    name: body.name,
+    vertices: new Map(
+      Array.from(body.vertices, ([id, vertex]) => [
+        id,
+        {
+          ...vertex,
+          position: [...vertex.position] as [number, number, number],
+          edgeIds: [...vertex.edgeIds],
+        },
+      ])
+    ),
+    edges: new Map(
+      Array.from(body.edges, ([id, edge]) => [
+        id,
+        {
+          ...edge,
+          vertexIds: [...edge.vertexIds] as [string, string],
+          faceIds: [...edge.faceIds],
+        },
+      ])
+    ),
+    faces: new Map(
+      Array.from(body.faces, ([id, face]) => [
+        id,
+        {
+          ...face,
+          boundaryEdgeIds: [...face.boundaryEdgeIds],
+          ...(face.innerBoundaryEdgeIds
+            ? {
+                innerBoundaryEdgeIds: face.innerBoundaryEdgeIds.map(
+                  (loop) => [...loop]
+                ),
+              }
+            : {}),
+        },
+      ])
+    ),
+    planes: new Map(
+      Array.from(body.planes, ([id, plane]) => [
+        id,
+        {
+          ...plane,
+          origin: [...plane.origin] as [number, number, number],
+          normal: [...plane.normal] as [number, number, number],
+          uAxis: [...plane.uAxis] as [number, number, number],
+          vAxis: [...plane.vAxis] as [number, number, number],
+        },
+      ])
+    ),
+  };
+}
+
+function collectOutputIds(
+  outputsByFeature: Map<string, FeatureOutput[]>
+): Map<string, string[]> {
+  return new Map(
+    Array.from(outputsByFeature.entries()).map(([featureId, outputs]) => [
+      featureId,
+      outputs.map(getFeatureOutputId),
+    ])
+  );
 }

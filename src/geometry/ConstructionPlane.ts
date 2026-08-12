@@ -5,6 +5,7 @@ import { createXYPlane, createXZPlane, createYZPlane } from './Plane';
 import type { Body } from './Body';
 import type { Face } from './Face';
 import type { PlaneRef, Point2D } from '../sketch';
+import { DEFAULT_TOLERANCE_POLICY } from './TolerancePolicy';
 
 /**
  * A construction plane extends a geometric plane with reference information.
@@ -58,7 +59,8 @@ export function createFaceConstructionPlane(
   face: Face,
   body: Body,
   faceId: string,
-  id?: string
+  id?: string,
+  featureId?: string
 ): ConstructionPlane | null {
   // Get the plane for this face
   const plane = body.planes.get(face.planeId);
@@ -72,6 +74,7 @@ export function createFaceConstructionPlane(
       type: 'face',
       faceId,
       bodyId: body.id,
+      ...(featureId ? { featureId } : {}),
     },
   };
 }
@@ -81,7 +84,8 @@ export function createFaceConstructionPlane(
  */
 export function getConstructionPlaneFromRef(
   ref: PlaneRef,
-  bodies: Body[]
+  bodies: Body[],
+  bodiesByFeature?: ReadonlyMap<string, readonly Body[]>
 ): ConstructionPlane | null {
   if (ref.type === 'world') {
     return createWorldConstructionPlane(
@@ -92,15 +96,25 @@ export function getConstructionPlaneFromRef(
   }
 
   if (ref.type === 'face') {
-    // Find the body
-    const body = bodies.find((b) => b.id === ref.bodyId);
+    const candidateBodies = ref.featureId && bodiesByFeature
+      ? bodiesByFeature.get(ref.featureId)
+      : bodies;
+    if (!candidateBodies) return null;
+
+    const body = candidateBodies.find((b) => b.id === ref.bodyId);
     if (!body) return null;
 
     // Find the face
     const face = body.faces.get(ref.faceId ?? '');
     if (!face) return null;
 
-    return createFaceConstructionPlane(face, body, ref.faceId ?? '', ref.id);
+    const resolved = createFaceConstructionPlane(face, body, ref.faceId ?? '', ref.id, ref.featureId);
+    if (!resolved || !ref.origin) return resolved;
+    return {
+      ...resolved,
+      origin: [...ref.origin],
+      ref: { ...resolved.ref, origin: [...ref.origin] },
+    };
   }
 
   return null;
@@ -195,7 +209,7 @@ export function getSketchToWorldMatrix(plane: ConstructionPlane): THREE.Matrix4 
 export function planesAreEquivalent(
   a: ConstructionPlane,
   b: ConstructionPlane,
-  tolerance = 1e-6
+  tolerance = DEFAULT_TOLERANCE_POLICY.linear
 ): boolean {
   const aOrigin = new THREE.Vector3(...a.origin);
   const bOrigin = new THREE.Vector3(...b.origin);

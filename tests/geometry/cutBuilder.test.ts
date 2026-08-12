@@ -6,6 +6,7 @@ import {
 } from '../../src/geometry/CutBuilder';
 import { createBody, addVertex, addEdge, addFace, addPlane, createPlane } from '../../src/geometry';
 import { createWorldConstructionPlane } from '../../src/geometry/ConstructionPlane';
+import type { Body } from '../../src/geometry/Body';
 import type { Profile2D } from '../../src/sketch';
 
 describe('CutBuilder', () => {
@@ -220,7 +221,7 @@ describe('CutBuilder', () => {
       const initialFaceCount = body.faces.size;
       const initialVertexCount = body.vertices.size;
 
-      const result = performCut(body, plane, profile, 0.5, false);
+      const result = performCut(body, plane, profile, 0.5, false, 'cut-feature');
 
       expect(result).not.toBeNull();
       expect(body.faces.size).toBeGreaterThan(initialFaceCount);
@@ -232,7 +233,7 @@ describe('CutBuilder', () => {
       const plane = createWorldConstructionPlane('xy', 1);
       const profile = createRectProfile();
 
-      performCut(body, plane, profile, 0.5, false);
+      performCut(body, plane, profile, 0.5, false, 'cut-feature');
 
       // Check that new faces were added with 'Cut' in their names
       const cutFaces = Array.from(body.faces.values()).filter(f => f.name?.includes('Cut'));
@@ -244,7 +245,7 @@ describe('CutBuilder', () => {
       const plane = createWorldConstructionPlane('xy', 1);
       const profile = createRectProfile();
 
-      performCut(body, plane, profile, 0.5, false);
+      performCut(body, plane, profile, 0.5, false, 'cut-feature');
 
       const sideFaces = Array.from(body.faces.values()).filter(f => f.name?.includes('Side'));
       expect(sideFaces.length).toBe(4); // 4 sides for rectangular profile
@@ -255,7 +256,7 @@ describe('CutBuilder', () => {
       const plane = createWorldConstructionPlane('xy', 0);
       const profile = createRectProfile();
 
-      const result = performCut(body, plane, profile, 0.5, true);
+      const result = performCut(body, plane, profile, 0.5, true, 'cut-feature');
 
       expect(result).not.toBeNull();
     });
@@ -271,7 +272,7 @@ describe('CutBuilder', () => {
         isValid: true,
       };
 
-      const result = performCut(body, plane, profile, 0.5, false);
+      const result = performCut(body, plane, profile, 0.5, false, 'cut-feature');
 
       // Should still work but might not create valid geometry
       // The function has try/catch and returns null on error
@@ -284,7 +285,7 @@ describe('CutBuilder', () => {
       const profile = createRectProfile();
       const cutDepth = 0.5;
 
-      performCut(body, plane, profile, cutDepth, false);
+      performCut(body, plane, profile, cutDepth, false, 'cut-feature');
 
       // The cut direction is the plane normal (0,0,1) since flip=false
       // Starting from z=1, going in direction (0,0,1) by 0.5, bottom is at z=1+0.5=1.5
@@ -293,5 +294,37 @@ describe('CutBuilder', () => {
       );
       expect(bottomVertices.length).toBe(4); // 4 corners of rectangular pocket
     });
+
+    it('namespaces sequential same-profile cuts by producing feature ID', () => {
+      const body = createBoxBody();
+      const plane = createWorldConstructionPlane('xy', 1);
+      const profile = createRectProfile();
+      const beforeFirst = collectTopologyIds(body);
+
+      performCut(body, plane, profile, 0.25, false, 'cut-feature-a');
+      const afterFirst = collectTopologyIds(body);
+      const firstCutIds = difference(afterFirst, beforeFirst);
+
+      performCut(body, plane, profile, 0.25, false, 'cut-feature-b');
+      const afterSecond = collectTopologyIds(body);
+      const secondCutIds = difference(afterSecond, afterFirst);
+
+      expect(firstCutIds.size).toBeGreaterThan(0);
+      expect(secondCutIds.size).toBe(firstCutIds.size);
+      expect([...firstCutIds].some((id) => secondCutIds.has(id))).toBe(false);
+    });
   });
 });
+
+function collectTopologyIds(body: Body): Set<string> {
+  return new Set([
+    ...body.vertices.keys(),
+    ...body.edges.keys(),
+    ...body.faces.keys(),
+    ...body.planes.keys(),
+  ]);
+}
+
+function difference(values: Set<string>, excluded: Set<string>): Set<string> {
+  return new Set([...values].filter((value) => !excluded.has(value)));
+}

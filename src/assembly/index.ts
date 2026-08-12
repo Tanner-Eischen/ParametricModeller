@@ -35,9 +35,14 @@ export {
 
 // Component rebuilder
 export {
+  ComponentRebuildErrorCodes,
   type ComponentRebuildResult,
+  type ComponentSourceBodyOwnership,
+  type InstanceBodyCloneResult,
+  type InstanceBodyTopologyLineage,
   type AssemblyDataProvider,
   createInstanceBody,
+  createInstanceBodyWithLineage,
   rebuildWithComponents,
   createComponentAwareRebuild,
 } from './ComponentRebuilder';
@@ -53,11 +58,14 @@ export {
 
 export {
   type FlushMateResult,
+  type FlushMateCheck,
   solveFlushMate,
   checkFlushMate,
 } from './constraints/FlushMateSolver';
 
 export {
+  type ConstraintRuntimeState,
+  type ConstraintRuntimeStatus,
   type ConstraintSolverResult,
   type ConstraintSolverContext,
   solveConstraints,

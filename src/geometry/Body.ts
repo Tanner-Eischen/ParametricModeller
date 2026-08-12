@@ -73,7 +73,10 @@ export function addFace(body: Body, face: Face): string {
   body.faces.set(face.id, face);
 
   // Update edge face references
-  for (const edgeId of face.boundaryEdgeIds) {
+  for (const edgeId of [
+    ...face.boundaryEdgeIds,
+    ...(face.innerBoundaryEdgeIds?.flat() ?? []),
+  ]) {
     const edge = body.edges.get(edgeId);
     if (edge) {
       body.edges.set(edgeId, {

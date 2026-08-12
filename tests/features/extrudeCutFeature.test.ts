@@ -3,6 +3,7 @@ import {
   createExtrudeCutFeature,
   validateExtrudeCutParams,
   rebuildExtrudeCut,
+  rebuildExtrudeCutWithAdapter,
   getExtrudeCutParams,
   updateExtrudeCutDistance,
   updateExtrudeCutMode,
@@ -13,9 +14,16 @@ import {
   type ExtrudeCutParams,
 } from '../../src/features/cut';
 import { createSketchFeature } from '../../src/features/sketch';
-import { createWorldPlaneRef, createRectangleEntity } from '../../src/sketch';
+import { createFacePlaneRef, createWorldPlaneRef, createRectangleEntity } from '../../src/sketch';
+import { prismaticSolidBooleanAdapter } from '../../src/features/extrude';
 import type { FeatureRecord } from '../../src/features';
-import { createRebuildContext } from '../../src/features';
+import {
+  createBoxFeature,
+  createRebuildContext,
+  createRebuildEngine,
+  rebuildBox,
+  rebuildSketch,
+} from '../../src/features';
 
 describe('ExtrudeCutFeature', () => {
   describe('defaultExtrudeCutParams', () => {
@@ -185,7 +193,7 @@ describe('ExtrudeCutFeature', () => {
       expect(feature.refsIn).toContain(sketchFeature.id);
     });
 
-    it('should cache sketch data in parameters', () => {
+    it('should reference live sketch data instead of caching a snapshot', () => {
       const bodyRef = createBodyRef('body123', 'feature123');
       const planeRef = createWorldPlaneRef('xy', 0);
       const rect = createRectangleEntity([0, 0], 1, 1, 0);
@@ -198,8 +206,7 @@ describe('ExtrudeCutFeature', () => {
       const feature = createExtrudeCutFeature(bodyRef, sketchFeature);
       const params = feature.parameters as unknown as ExtrudeCutParams;
 
-      expect(params.sketchData).toBeDefined();
-      expect(params.sketchData?.planeRef).toEqual(planeRef);
+      expect(params.sketchData).toBeUndefined();
     });
 
     it('should create feature with distance mode by default', () => {
@@ -362,6 +369,73 @@ describe('ExtrudeCutFeature', () => {
   });
 
   describe('rebuildExtrudeCut', () => {
+    it('cuts inward from an outward-facing attached sketch plane', () => {
+      const box = createBoxFeature({ width: 20, depth: 20, height: 1 });
+      const sketch = createSketchFeature({
+        planeRef: createFacePlaneRef('+Z', `${box.id}_body`, box.id, [10, 10, 1]),
+        entities: [createRectangleEntity([-2.5, -2.5], 5, 5, 0, 'face-cut-rect')],
+        dimensions: [],
+      });
+      const cut = createExtrudeCutFeature(
+        createBodyRef(`${box.id}_body`, box.id),
+        sketch,
+        'distance',
+        0.5,
+        true
+      );
+      const engine = createRebuildEngine();
+      engine.registerHandler('box', rebuildBox);
+      engine.registerHandler('sketch', rebuildSketch);
+      engine.registerHandler(EXTRUDE_CUT_FEATURE_TYPE, (feature, context) =>
+        rebuildExtrudeCutWithAdapter(feature, context, prismaticSolidBooleanAdapter)
+      );
+
+      const result = engine.rebuild([box, sketch, cut]);
+
+      expect(result.ok).toBe(true);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it('uses the current sketch output on every rebuild', () => {
+      const box = createBoxFeature({ width: 2, depth: 2, height: 2 });
+      const rect = createRectangleEntity([0.25, 0.25], 0.5, 0.5, 0, 'cut-rect');
+      const sketch = createSketchFeature({
+        planeRef: createWorldPlaneRef('xy', 0),
+        entities: [rect],
+        dimensions: [],
+      });
+      const cut = createExtrudeCutFeature(
+        createBodyRef(`${box.id}_body`, box.id),
+        sketch,
+        'distance',
+        0.5
+      );
+      const engine = createRebuildEngine();
+      engine.registerHandler('box', rebuildBox);
+      engine.registerHandler('sketch', rebuildSketch);
+      engine.registerHandler(EXTRUDE_CUT_FEATURE_TYPE, rebuildExtrudeCut);
+
+      const first = engine.rebuild([box, sketch, cut]);
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      const firstCutXs = Array.from(first.bodies[0]!.vertices.values())
+        .filter((vertex) => !vertex.id.startsWith('+') && !vertex.id.startsWith('-'))
+        .map((vertex) => vertex.position[0]);
+      expect(Math.max(...firstCutXs)).toBe(0.75);
+
+      sketch.parameters = {
+        ...sketch.parameters,
+        entities: [{ ...rect, width: 1.25 }],
+      };
+      const second = engine.rebuild([box, sketch, cut]);
+      expect(second.ok).toBe(true);
+      if (!second.ok) return;
+      const secondCutXs = Array.from(second.bodies[0]!.vertices.values())
+        .filter((vertex) => !vertex.id.startsWith('+') && !vertex.id.startsWith('-'))
+        .map((vertex) => vertex.position[0]);
+      expect(Math.max(...secondCutXs)).toBe(1.5);
+    });
+
     it('should fail with missing sketch data', () => {
       const feature: FeatureRecord = {
         id: 'cut123',

@@ -4,6 +4,8 @@ import type { Face } from './Face';
 import type { Plane } from './Plane';
 import type { Vertex } from './Vertex';
 import { distanceToPoint } from './Plane';
+import { DEFAULT_TOLERANCE_POLICY } from './TolerancePolicy';
+import { normalizePlanarRegion, triangulatePlanarRegion, type PlanarPoint } from './PlanarRegion';
 
 /**
  * Result of face triangulation.
@@ -33,43 +35,46 @@ export function triangulateFace(
     return null;
   }
 
-  // Get ordered vertices from boundary edges
-  const vertices = getOrderedFaceVertices(body, face);
-  if (vertices.length < 3) {
+  const outerVertices = getOrderedLoopVertices(body, face.boundaryEdgeIds);
+  const holeVertices = (face.innerBoundaryEdgeIds ?? []).map((loop) =>
+    getOrderedLoopVertices(body, loop)
+  );
+  if (outerVertices.length < 3 || holeVertices.some((loop) => loop.length < 3)) {
     return null;
   }
 
   // Verify vertices are planar
-  for (const vertex of vertices) {
-    if (!isVertexOnPlane(plane, vertex.position, 1e-6)) {
+  for (const vertex of [...outerVertices, ...holeVertices.flat()]) {
+    if (!isVertexOnPlane(plane, vertex.position, DEFAULT_TOLERANCE_POLICY.linear)) {
       return null;
     }
   }
 
-  // Project vertices to 2D plane for triangulation
-  // (Used for future non-convex polygon support)
-  // const points2D = projectVerticesToPlane(plane, vertices);
+  const projectedOuter = projectVerticesToPlanePoints(plane, outerVertices);
+  const projectedHoles = holeVertices.map((vertices) =>
+    projectVerticesToPlanePoints(plane, vertices)
+  );
+  const normalized = normalizePlanarRegion({ outer: projectedOuter, holes: projectedHoles });
+  if (!normalized.ok) return null;
+  const triangulation = triangulatePlanarRegion(normalized.region);
+  if (!triangulation) return null;
 
-  // Fan triangulation (works for convex polygons)
   const positions: number[] = [];
-  const indices: number[] = [];
+  const indices = [...triangulation.indices];
   const normals: number[] = [];
   const faceIds: number[] = [];
 
   // Convert face ID to a numeric hash for GPU attribute
   const faceIdNumeric = hashFaceId(faceId);
 
-  // Add vertex positions and normals
-  for (const vertex of vertices) {
-    positions.push(...vertex.position);
+  for (const point of triangulation.points) {
+    const position = planePointToWorld(plane, point);
+    positions.push(...position);
     normals.push(...plane.normal);
     faceIds.push(faceIdNumeric);
   }
 
-  // Create triangles (fan from first vertex)
-  for (let i = 1; i < vertices.length - 1; i++) {
-    indices.push(0, i, i + 1);
-  }
+  orientTrianglesToNormal(positions, indices, plane.normal);
 
   return { positions, indices, normals, faceIds };
 }
@@ -137,7 +142,7 @@ export function createBufferGeometry(result: TriangulationResult): THREE.BufferG
   if (result.faceIds.length > 0) {
     geometry.setAttribute(
       'faceId',
-      new THREE.Float32BufferAttribute(result.faceIds, 1)
+      new THREE.Uint32BufferAttribute(result.faceIds, 1)
     );
   }
 
@@ -175,63 +180,56 @@ export function createWireframeGeometry(body: Body): THREE.BufferGeometry {
  * Get vertices of a face in order around the boundary.
  * Follows edges to build ordered vertex list.
  */
-function getOrderedFaceVertices(body: Body, face: Face): Vertex[] {
-  if (face.boundaryEdgeIds.length === 0) {
+export function getOrderedLoopVertices(body: Body, boundaryEdgeIds: readonly string[]): Vertex[] {
+  if (boundaryEdgeIds.length === 0) {
     return [];
   }
 
   const edgeMap = new Map<string, { v1: string; v2: string }>();
 
   // Build edge lookup
-  for (const edgeId of face.boundaryEdgeIds) {
+  for (const edgeId of boundaryEdgeIds) {
     const edge = body.edges.get(edgeId);
     if (edge) {
       edgeMap.set(edgeId, { v1: edge.vertexIds[0], v2: edge.vertexIds[1] });
     }
   }
 
-  // Start with first edge and traverse
-  const visited = new Set<string>();
-  const orderedVertexIds: string[] = [];
-
-  const firstEdgeId = face.boundaryEdgeIds[0] as string;
+  const firstEdgeId = boundaryEdgeIds[0] as string;
   const firstEdge = edgeMap.get(firstEdgeId);
   if (!firstEdge) return [];
-
-  orderedVertexIds.push(firstEdge.v1, firstEdge.v2);
-  visited.add(firstEdgeId);
-
-  // Traverse remaining edges
-  while (visited.size < face.boundaryEdgeIds.length) {
-    const lastVertexId = orderedVertexIds[orderedVertexIds.length - 1];
-    let foundNext = false;
-
-    for (const edgeId of face.boundaryEdgeIds) {
-      if (visited.has(edgeId)) continue;
-
-      const edge = edgeMap.get(edgeId);
-      if (!edge) continue;
-
-      if (edge.v1 === lastVertexId) {
-        orderedVertexIds.push(edge.v2);
-        visited.add(edgeId);
-        foundNext = true;
-        break;
-      } else if (edge.v2 === lastVertexId) {
-        orderedVertexIds.push(edge.v1);
-        visited.add(edgeId);
-        foundNext = true;
-        break;
-      }
-    }
-
-    if (!foundNext) break;
-  }
-
-  // Resolve vertex IDs to Vertex objects
+  const orderedVertexIds = [firstEdge.v1, firstEdge.v2]
+    .map((start) => traverseEdgeLoop(boundaryEdgeIds, edgeMap, firstEdgeId, start))
+    .find((ordered) => ordered !== null);
+  if (!orderedVertexIds) return [];
   return orderedVertexIds
     .map((id) => body.vertices.get(id as string))
     .filter((v): v is Vertex => v !== undefined);
+}
+
+function traverseEdgeLoop(
+  edgeIds: readonly string[],
+  edgeMap: Map<string, { v1: string; v2: string }>,
+  firstEdgeId: string,
+  startVertexId: string
+): string[] | null {
+  const first = edgeMap.get(firstEdgeId)!;
+  const ordered = [startVertexId];
+  const visited = new Set([firstEdgeId]);
+  let current = first.v1 === startVertexId ? first.v2 : first.v1;
+  while (visited.size < edgeIds.length) {
+    ordered.push(current);
+    const nextId = edgeIds.find((edgeId) => {
+      if (visited.has(edgeId)) return false;
+      const edge = edgeMap.get(edgeId);
+      return edge?.v1 === current || edge?.v2 === current;
+    });
+    if (!nextId) return null;
+    const next = edgeMap.get(nextId)!;
+    visited.add(nextId);
+    current = next.v1 === current ? next.v2 : next.v1;
+  }
+  return current === startVertexId && ordered.length === edgeIds.length ? ordered : null;
 }
 
 /**
@@ -265,4 +263,48 @@ export function _projectVerticesToPlane(
       y: p.dot(v),
     };
   });
+}
+
+function projectVerticesToPlanePoints(plane: Plane, vertices: readonly Vertex[]): PlanarPoint[] {
+  const origin = new THREE.Vector3(...plane.origin);
+  const u = new THREE.Vector3(...plane.uAxis);
+  const v = new THREE.Vector3(...plane.vAxis);
+  return vertices.map((vertex) => {
+    const point = new THREE.Vector3(...vertex.position).sub(origin);
+    return [point.dot(u), point.dot(v)];
+  });
+}
+
+function planePointToWorld(plane: Plane, point: PlanarPoint): [number, number, number] {
+  return [
+    plane.origin[0] + plane.uAxis[0] * point[0] + plane.vAxis[0] * point[1],
+    plane.origin[1] + plane.uAxis[1] * point[0] + plane.vAxis[1] * point[1],
+    plane.origin[2] + plane.uAxis[2] * point[0] + plane.vAxis[2] * point[1],
+  ];
+}
+
+function orientTrianglesToNormal(
+  positions: readonly number[],
+  indices: number[],
+  normal: [number, number, number]
+): void {
+  for (let index = 0; index < indices.length; index += 3) {
+    const a = indices[index]! * 3;
+    const b = indices[index + 1]! * 3;
+    const c = indices[index + 2]! * 3;
+    const ab: [number, number, number] = [
+      positions[b]! - positions[a]!,
+      positions[b + 1]! - positions[a + 1]!,
+      positions[b + 2]! - positions[a + 2]!,
+    ];
+    const ac: [number, number, number] = [
+      positions[c]! - positions[a]!,
+      positions[c + 1]! - positions[a + 1]!,
+      positions[c + 2]! - positions[a + 2]!,
+    ];
+    const dot = (ab[1] * ac[2] - ab[2] * ac[1]) * normal[0]
+      + (ab[2] * ac[0] - ab[0] * ac[2]) * normal[1]
+      + (ab[0] * ac[1] - ab[1] * ac[0]) * normal[2];
+    if (dot < 0) [indices[index + 1], indices[index + 2]] = [indices[index + 2]!, indices[index + 1]!];
+  }
 }

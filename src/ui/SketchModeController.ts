@@ -4,7 +4,6 @@ import {
   type ConstructionPlane,
   createWorldConstructionPlane,
   getConstructionPlaneFromRef,
-  getDefaultSketchPlane,
 } from '../geometry';
 import type { PlaneRef } from '../sketch';
 import type { Body } from '../geometry';
@@ -43,14 +42,19 @@ export class SketchModeController {
   /**
    * Enter sketch mode on a plane.
    */
-  enter(planeRef: PlaneRef, sketchId: string, bodies: Body[] = []): void {
+  enter(
+    planeRef: PlaneRef,
+    sketchId: string,
+    bodies: Body[] = [],
+    bodiesByFeature?: ReadonlyMap<string, readonly Body[]>
+  ): void {
     if (this._isActive) {
       log.warn('Already in sketch mode, exiting first');
       this.exit();
     }
 
     // Resolve the plane
-    const plane = getConstructionPlaneFromRef(planeRef, bodies);
+    const plane = getConstructionPlaneFromRef(planeRef, bodies, bodiesByFeature);
     if (!plane) {
       // Fall back to world plane
       if (planeRef.type === 'world' && planeRef.worldPlane) {
@@ -59,7 +63,8 @@ export class SketchModeController {
           planeRef.offset ?? 0
         );
       } else {
-        this._currentPlane = getDefaultSketchPlane();
+        log.error('Could not resolve face-based sketch plane', { sketchId, planeRef });
+        return;
       }
     } else {
       this._currentPlane = plane;
@@ -71,7 +76,7 @@ export class SketchModeController {
     log.info('Entered sketch mode', { sketchId, planeRef });
 
     eventBus.emit('sketch:enter', {
-      planeRef: planeRef as { id: string; type: 'world' | 'face'; worldPlane?: 'xy' | 'xz' | 'yz'; offset?: number; faceId?: string; bodyId?: string },
+      planeRef: planeRef as { id: string; type: 'world' | 'face'; worldPlane?: 'xy' | 'xz' | 'yz'; offset?: number; faceId?: string; bodyId?: string; featureId?: string },
       sketchId,
     });
 
@@ -109,11 +114,16 @@ export class SketchModeController {
   /**
    * Toggle sketch mode.
    */
-  toggle(planeRef?: PlaneRef, sketchId?: string, bodies?: Body[]): void {
+  toggle(
+    planeRef?: PlaneRef,
+    sketchId?: string,
+    bodies?: Body[],
+    bodiesByFeature?: ReadonlyMap<string, readonly Body[]>
+  ): void {
     if (this._isActive) {
       this.exit();
     } else if (planeRef && sketchId) {
-      this.enter(planeRef, sketchId, bodies);
+      this.enter(planeRef, sketchId, bodies, bodiesByFeature);
     }
   }
 

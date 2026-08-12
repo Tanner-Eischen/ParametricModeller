@@ -19,6 +19,10 @@ const log = createModuleLogger('AssemblyPanel');
  */
 export interface AssemblyPanelOptions {
   container: HTMLElement;
+  onCreateComponent?: () => void;
+  onAddInstance?: (componentId: string | null) => void;
+  onSelectInstance?: (instance: ComponentInstance) => void;
+  onCreateConstraint?: () => void;
 }
 
 /**
@@ -26,6 +30,7 @@ export interface AssemblyPanelOptions {
  */
 export class AssemblyPanel {
   private container: HTMLElement;
+  private options: AssemblyPanelOptions;
   private panelElement: HTMLElement;
   private components: Component[] = [];
   private instances: ComponentInstance[] = [];
@@ -35,6 +40,7 @@ export class AssemblyPanel {
 
   constructor(options: AssemblyPanelOptions) {
     this.container = options.container;
+    this.options = options;
     this.panelElement = this.createPanel();
     this.container.appendChild(this.panelElement);
     this.setupEventListeners();
@@ -55,19 +61,31 @@ export class AssemblyPanel {
     `;
 
     // Components section
-    const componentsSection = this.createSection('Components', () => this.addComponent());
+    const componentsSection = this.createSection(
+      'Components',
+      'Create a component from the current selection',
+      () => this.addComponent()
+    );
     const componentsList = this.createListElement('components-list');
     componentsSection.appendChild(componentsList);
     panel.appendChild(componentsSection);
 
     // Instances section
-    const instancesSection = this.createSection('Instances', () => this.addInstance());
+    const instancesSection = this.createSection(
+      'Instances',
+      'Add an instance of the selected component',
+      () => this.addInstance()
+    );
     const instancesList = this.createListElement('instances-list');
     instancesSection.appendChild(instancesList);
     panel.appendChild(instancesSection);
 
     // Constraints section
-    const constraintsSection = this.createSection('Constraints', () => this.addConstraint());
+    const constraintsSection = this.createSection(
+      'Constraints',
+      'Create a flush mate between two instances',
+      () => this.addConstraint()
+    );
     const constraintsList = this.createListElement('constraints-list');
     constraintsSection.appendChild(constraintsList);
     panel.appendChild(constraintsSection);
@@ -75,7 +93,7 @@ export class AssemblyPanel {
     return panel;
   }
 
-  private createSection(title: string, onAdd: () => void): HTMLElement {
+  private createSection(title: string, buttonTitle: string, onAdd: () => void): HTMLElement {
     const section = document.createElement('div');
     section.style.cssText = `
       border: 1px solid #333;
@@ -100,6 +118,7 @@ export class AssemblyPanel {
     // Add button
     const addBtn = document.createElement('button');
     addBtn.textContent = '+';
+    addBtn.title = buttonTitle;
     addBtn.style.cssText = `
       background: #4a9eff;
       border: none;
@@ -164,6 +183,12 @@ export class AssemblyPanel {
     this.components = [...components];
     this.instances = [...instances];
     this.constraints = [...constraints];
+    if (this.selectedComponentId && !this.components.some((component) => component.id === this.selectedComponentId)) {
+      this.selectedComponentId = null;
+    }
+    if (this.selectedInstanceId && !this.instances.some((instance) => instance.id === this.selectedInstanceId)) {
+      this.selectedInstanceId = null;
+    }
     this.render();
     log.debug('Assembly data set', {
       components: components.length,
@@ -192,7 +217,7 @@ export class AssemblyPanel {
 
     if (this.components.length === 0) {
       const empty = document.createElement('div');
-      empty.textContent = 'No components (press G to create)';
+      empty.textContent = 'No components yet';
       empty.style.cssText = 'color: #666; padding: 8px; text-align: center; font-style: italic;';
       list.appendChild(empty);
       return;
@@ -264,7 +289,7 @@ export class AssemblyPanel {
 
     if (this.instances.length === 0) {
       const empty = document.createElement('div');
-      empty.textContent = 'No instances (select a component and press I)';
+      empty.textContent = 'No instances yet';
       empty.style.cssText = 'color: #666; padding: 8px; text-align: center; font-style: italic;';
       list.appendChild(empty);
       return;
@@ -318,6 +343,7 @@ export class AssemblyPanel {
       this.selectedInstanceId = instance.id;
       this.renderInstances();
       eventBus.emit('ui:status', { message: `Selected instance: ${instance.name}` });
+      this.options.onSelectInstance?.(instance);
     });
 
     return item;
@@ -398,8 +424,12 @@ export class AssemblyPanel {
    * Add a component (triggers event).
    */
   private addComponent(): void {
-    // This will be handled by the keyboard shortcut in App.ts
-    eventBus.emit('ui:status', { message: 'Press G to create a component from selected features' });
+    if (this.options.onCreateComponent) {
+      this.options.onCreateComponent();
+      return;
+    }
+
+    eventBus.emit('ui:status', { message: 'Create component action unavailable' });
   }
 
   /**
@@ -410,11 +440,13 @@ export class AssemblyPanel {
       eventBus.emit('ui:status', { message: 'Select a component first' });
       return;
     }
-    // This will be handled in App.ts
-    eventBus.emit('instance:added', {
-      instanceId: 'new',
-      componentId: this.selectedComponentId,
-    });
+
+    if (this.options.onAddInstance) {
+      this.options.onAddInstance(this.selectedComponentId);
+      return;
+    }
+
+    eventBus.emit('ui:status', { message: 'Add instance action unavailable' });
   }
 
   /**
@@ -425,8 +457,13 @@ export class AssemblyPanel {
       eventBus.emit('ui:status', { message: 'Need at least 2 instances to create a constraint' });
       return;
     }
-    eventBus.emit('ui:status', { message: 'Select first face for constraint' });
-    // Constraint creation will be handled by ConstraintCreationController
+
+    if (this.options.onCreateConstraint) {
+      this.options.onCreateConstraint();
+      return;
+    }
+
+    eventBus.emit('ui:status', { message: 'Constraint creation unavailable' });
   }
 
   /**

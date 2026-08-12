@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { validateOffsetFace, offsetFace } from '../../src/geometry/FaceOffset';
+import { validateClosedManifoldBody } from '../../src/geometry/Validation';
 import { createBoxBody } from '../../src/features/primitives/BoxFeature';
 import type { Body } from '../../src/geometry';
 
@@ -25,6 +26,21 @@ describe('FaceOffset', () => {
       expect(result.valid).toBe(true);
       expect(result.error).toBeNull();
     });
+
+    it('allows inward travel but rejects collapse and pass-through', () => {
+      expect(validateOffsetFace(boxBody, '+X', -0.5).valid).toBe(true);
+      expect(validateOffsetFace(boxBody, '+X', -1.998).valid).toBe(true);
+      expect(validateOffsetFace(boxBody, '+X', -1.9995).valid).toBe(false);
+      expect(validateOffsetFace(boxBody, '+X', -2).valid).toBe(false);
+      expect(validateOffsetFace(boxBody, '+X', -3).valid).toBe(false);
+    });
+
+    it.each([0, Number.NaN, Number.POSITIVE_INFINITY])(
+      'rejects an invalid distance %s',
+      (distance) => {
+        expect(validateOffsetFace(boxBody, '+X', distance).valid).toBe(false);
+      }
+    );
 
     it('should fail for non-existent face', () => {
       const result = validateOffsetFace(boxBody, 'nonexistent_face', 1);
@@ -55,6 +71,41 @@ describe('FaceOffset', () => {
       expect(result?.faces.size).toBe(boxBody.faces.size);
     });
 
+    it.each([
+      ['+X', 0], ['-X', 0], ['+Y', 1], ['-Y', 1], ['+Z', 2], ['-Z', 2],
+    ] as const)('offsets %s in both signed directions', (faceId, _axis) => {
+      for (const distance of [0.5, -0.5]) {
+        const original = new Map(
+          [...boxBody.vertices].map(([id, vertex]) => [id, [...vertex.position]])
+        );
+        const result = offsetFace(boxBody, faceId, distance);
+
+        expect(result).not.toBeNull();
+        expect(validateClosedManifoldBody(result!).ok).toBe(true);
+        const face = boxBody.faces.get(faceId)!;
+        const plane = boxBody.planes.get(face.planeId)!;
+        const movedIds = new Set(
+          face.boundaryEdgeIds.flatMap((edgeId) => boxBody.edges.get(edgeId)!.vertexIds)
+        );
+        for (const [id, vertex] of result!.vertices) {
+          const before = original.get(id)!;
+          for (const component of [0, 1, 2] as const) {
+            const displacement = vertex.position[component] - before[component]!;
+            expect(displacement).toBeCloseTo(
+              movedIds.has(id) ? plane.normal[component] * distance : 0
+            );
+            expect(boxBody.vertices.get(id)?.position[component]).toBe(before[component]);
+          }
+        }
+        expect(result!.planes.get(face.planeId)?.origin).toEqual(
+          plane.origin.map((value, component) => value + plane.normal[component]! * distance)
+        );
+        expect([...result!.vertices.keys()]).toEqual([...boxBody.vertices.keys()]);
+        expect([...result!.edges.keys()]).toEqual([...boxBody.edges.keys()]);
+        expect([...result!.faces.keys()]).toEqual([...boxBody.faces.keys()]);
+      }
+    });
+
     it('should return null for invalid face', () => {
       const result = offsetFace(boxBody, 'nonexistent_face', 1);
 
@@ -78,14 +129,12 @@ describe('FaceOffset', () => {
       expect(result?.id).toBe(originalId);
     });
 
-    it('should handle zero distance', () => {
+    it('should reject zero distance', () => {
       const faceId = Array.from(boxBody.faces.keys())[0]!;
       // Zero distance should be handled - it offsets by 0
       const result = offsetFace(boxBody, faceId, 0);
 
-      // Zero distance should still return a valid body (with no actual change)
-      // or null if the implementation rejects it
-      expect([null, expect.any(Object)]).toContainEqual(result);
+      expect(result).toBeNull();
     });
   });
 });

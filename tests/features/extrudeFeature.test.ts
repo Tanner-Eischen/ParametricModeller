@@ -12,11 +12,10 @@ import {
   defaultExtrudeParams,
   rebuildExtrude,
   type ExtrudeParams,
+  createRebuildEngine,
+  rebuildSketch,
 } from '../../src/features';
-import {
-  createSketchFeature,
-  type SketchParams,
-} from '../../src/features';
+import { createSketchFeature } from '../../src/features';
 import { createWorldPlaneRef, createRectangleEntity } from '../../src/sketch';
 import { createRebuildContext } from '../../src/features';
 import type { FeatureRecord } from '../../src/features';
@@ -106,7 +105,7 @@ describe('ExtrudeFeature', () => {
       expect(extrudeFeature.refsIn).toContain(sketchFeature.id);
     });
 
-    it('should store sketch data for rebuild', () => {
+    it('should reference live sketch data instead of caching a snapshot', () => {
       const planeRef = createWorldPlaneRef('xy');
       const rect = createRectangleEntity([0, 0], 1, 1);
       const sketchFeature = createSketchFeature({
@@ -116,11 +115,10 @@ describe('ExtrudeFeature', () => {
       });
 
       const extrudeFeature = createExtrudeFeature(sketchFeature);
-      const params = extrudeFeature.parameters as unknown as ExtrudeParams & { sketchData?: SketchParams };
+      const params = extrudeFeature.parameters as unknown as ExtrudeParams & { sketchData?: unknown };
 
       expect(params.sketchId).toBe(sketchFeature.id);
-      expect(params.sketchData).toBeDefined();
-      expect(params.sketchData?.entities).toHaveLength(1);
+      expect(params.sketchData).toBeUndefined();
     });
 
     it('should use default values', () => {
@@ -230,12 +228,14 @@ describe('ExtrudeFeature', () => {
         dimensions: [],
       });
       const extrudeFeature = createExtrudeFeature(sketchFeature, 0, 1, false);
-      const context = createRebuildContext();
-
-      const result = rebuildExtrude(extrudeFeature, context);
+      const engine = createRebuildEngine();
+      engine.registerHandler('sketch', rebuildSketch);
+      engine.registerHandler('extrude', rebuildExtrude);
+      const result = engine.rebuild([sketchFeature, extrudeFeature]);
 
       expect(result.ok).toBe(true);
       if (result.ok) {
+        expect(result.outputsByFeature.get(sketchFeature.id)).toEqual([sketchFeature.id]);
         expect(result.bodies).toHaveLength(1);
 
         const body = result.bodies[0];
@@ -247,6 +247,45 @@ describe('ExtrudeFeature', () => {
           expect(body.faces.size).toBe(6); // bottom, top, 4 sides
         }
       }
+    });
+
+    it('uses the current sketch output on every rebuild', () => {
+      const planeRef = createWorldPlaneRef('xy');
+      const rect = createRectangleEntity([0, 0], 1, 1, 0, 'rect');
+      const sketchFeature = createSketchFeature({ planeRef, entities: [rect], dimensions: [] });
+      const extrudeFeature = createExtrudeFeature(sketchFeature, 0, 2);
+      const engine = createRebuildEngine();
+      engine.registerHandler('sketch', rebuildSketch);
+      engine.registerHandler('extrude', rebuildExtrude);
+
+      const first = engine.rebuild([sketchFeature, extrudeFeature]);
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      expect(Math.max(...Array.from(first.bodies[0]!.vertices.values(), (vertex) => vertex.position[0]))).toBe(1);
+
+      sketchFeature.parameters = {
+        ...sketchFeature.parameters,
+        entities: [{ ...rect, width: 4 }],
+      };
+      const second = engine.rebuild([sketchFeature, extrudeFeature]);
+      expect(second.ok).toBe(true);
+      if (!second.ok) return;
+      expect(Math.max(...Array.from(second.bodies[0]!.vertices.values(), (vertex) => vertex.position[0]))).toBe(4);
+    });
+
+    it('accepts cached sketch data only as a legacy direct-handler fallback', () => {
+      const planeRef = createWorldPlaneRef('xy');
+      const rect = createRectangleEntity([0, 0], 2, 2);
+      const sketchFeature = createSketchFeature({ planeRef, entities: [rect], dimensions: [] });
+      const extrudeFeature = createExtrudeFeature(sketchFeature);
+      extrudeFeature.parameters = {
+        ...extrudeFeature.parameters,
+        sketchData: sketchFeature.parameters,
+      };
+
+      const result = rebuildExtrude(extrudeFeature, createRebuildContext());
+
+      expect(result.ok).toBe(true);
     });
 
     it('should return error for missing sketch data', () => {

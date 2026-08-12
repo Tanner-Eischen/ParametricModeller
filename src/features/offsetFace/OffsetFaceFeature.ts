@@ -5,8 +5,8 @@ import type { RebuildContext } from '../RebuildContext';
 import type { RebuildHandlerResult } from '../RebuildEngine';
 import { getAllBodies } from '../RebuildContext';
 import { offsetFace, validateOffsetFace } from '../../geometry/FaceOffset';
-import { cloneBody } from '../../geometry/Body';
 import { validateBody } from '../../geometry/Validation';
+import { DEFAULT_TOLERANCE_POLICY } from '../../geometry/TolerancePolicy';
 import { createModuleLogger } from '../../core/logger';
 
 const log = createModuleLogger('OffsetFaceFeature');
@@ -30,9 +30,9 @@ export interface FaceRef {
 export interface OffsetFaceParams {
   /** Reference to the target face */
   faceRef: FaceRef;
-  /** Offset distance (positive = add material) */
+  /** Signed offset distance (positive = outward, negative = inward) */
   distance: number;
-  /** Offset mode - v1 only supports addMaterial */
+  /** Legacy persistence value; the distance sign determines direction. */
   mode: 'addMaterial';
 }
 
@@ -75,11 +75,8 @@ export function validateOffsetFaceParams(params: Partial<OffsetFaceParams>): Dia
   }
 
   if (params.distance !== undefined) {
-    if (params.distance <= 0) {
-      diagnostics.push(error('INVALID_DISTANCE', 'Distance must be greater than 0 for addMaterial mode'));
-    }
-    if (!isFinite(params.distance)) {
-      diagnostics.push(error('INVALID_DISTANCE', 'Distance must be a finite number'));
+    if (!Number.isFinite(params.distance) || Math.abs(params.distance) <= DEFAULT_TOLERANCE_POLICY.linear) {
+      diagnostics.push(error('INVALID_DISTANCE', 'Distance must be a finite, non-zero value'));
     }
   }
 
@@ -144,11 +141,8 @@ export function rebuildOffsetFace(
     };
   }
 
-  // Clone the body for modification
-  const clonedBody = cloneBody(targetBody);
-
   // Perform the offset
-  const result = offsetFace(clonedBody, params.faceRef.faceId, params.distance);
+  const result = offsetFace(targetBody, params.faceRef.faceId, params.distance);
   if (!result) {
     return {
       ok: false,
@@ -177,6 +171,7 @@ export function rebuildOffsetFace(
     ok: true,
     bodies: [result],
     diagnostics: [],
+    replacedBodyIds: [targetBody.id],
   };
 }
 

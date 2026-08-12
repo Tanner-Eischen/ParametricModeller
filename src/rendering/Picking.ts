@@ -140,8 +140,13 @@ export class Picking {
     // Intersect with objects
     const intersects = this.raycaster.intersectObjects(objects, true);
 
-    if (intersects.length > 0) {
-      const hit = intersects[0]!;
+    const hit = intersects.find((candidate) =>
+      candidate.face !== null &&
+      candidate.object instanceof THREE.Mesh &&
+      candidate.object.geometry.getAttribute('faceId') !== undefined
+    );
+
+    if (hit) {
       const objectId = this.getObjectId(hit.object);
       const bodyId = this.getBodyId(hit.object);
 

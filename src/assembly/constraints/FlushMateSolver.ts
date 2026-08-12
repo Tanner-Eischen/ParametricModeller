@@ -22,6 +22,16 @@ export interface FlushMateResult {
   error?: string;
 }
 
+export interface FlushMateCheck {
+  satisfied: boolean;
+  /** Signed separation of face B from face A along face A's normal. */
+  distance: number;
+  /** Absolute difference between signed separation and the requested offset. */
+  offsetError: number;
+  /** Angular error in radians from anti-parallel face normals. */
+  angularError: number;
+}
+
 /**
  * Get the plane of a face from a body.
  */
@@ -77,6 +87,11 @@ export function solveFlushMate(
   // Face normals
   const normalA = new THREE.Vector3(...planeA.normal);
   const normalB = new THREE.Vector3(...planeB.normal);
+  if (normalA.lengthSq() < 1e-18 || normalB.lengthSq() < 1e-18) {
+    return { ok: false, error: 'Mate faces must have non-zero plane normals' };
+  }
+  normalA.normalize();
+  normalB.normalize();
 
   log.debug('Solving flush mate', {
     centerA: centerA.toArray(),
@@ -94,16 +109,16 @@ export function solveFlushMate(
   const rotation = new THREE.Quaternion();
 
   // Check if normals are already (anti-)parallel
-  const dot = normalB.dot(targetNormalB);
+  const dot = THREE.MathUtils.clamp(normalB.dot(targetNormalB), -1, 1);
   if (Math.abs(dot - 1) < 1e-6) {
     // Already aligned, no rotation needed
     rotation.identity();
   } else if (Math.abs(dot + 1) < 1e-6) {
     // Anti-parallel, rotate 180 degrees around any perpendicular axis
-    const perp = new THREE.Vector3(1, 0, 0);
-    if (Math.abs(normalB.dot(perp)) > 0.9) {
-      perp.set(0, 1, 0);
-    }
+    const basis = Math.abs(normalB.x) < 0.9
+      ? new THREE.Vector3(1, 0, 0)
+      : new THREE.Vector3(0, 1, 0);
+    const perp = new THREE.Vector3().crossVectors(normalB, basis).normalize();
     rotation.setFromAxisAngle(perp, Math.PI);
   } else {
     // General case: rotate around the cross product axis
@@ -112,20 +127,23 @@ export function solveFlushMate(
     rotation.setFromAxisAngle(axis, angle);
   }
 
-  // Apply rotation to center B
-  const rotatedCenterB = centerB.clone().applyQuaternion(rotation);
-
-  // Calculate translation to align centers with offset along normalA
-  // Target: rotatedCenterB + translation = centerA + offset * normalA
-  const translation = new THREE.Vector3()
-    .copy(centerA)
-    .add(normalA.clone().multiplyScalar(offset))
-    .sub(rotatedCenterB);
-
-  // Compose final transform matrix
-  const matrix = new THREE.Matrix4();
-  matrix.makeRotationFromQuaternion(rotation);
-  matrix.setPosition(translation);
+  // Rotate around face B's plane origin. A flush mate leaves both tangential
+  // translation degrees of freedom untouched; it only corrects separation
+  // along face A's normal.
+  const rotationMatrix = new THREE.Matrix4().makeRotationFromQuaternion(rotation);
+  const rotateAroundCenterB = new THREE.Matrix4()
+    .makeTranslation(centerB.x, centerB.y, centerB.z)
+    .multiply(rotationMatrix)
+    .multiply(new THREE.Matrix4().makeTranslation(
+      -centerB.x,
+      -centerB.y,
+      -centerB.z
+    ));
+  const currentSeparation = centerB.clone().sub(centerA).dot(normalA);
+  const translation = normalA.clone().multiplyScalar(offset - currentSeparation);
+  const matrix = new THREE.Matrix4()
+    .makeTranslation(translation.x, translation.y, translation.z)
+    .multiply(rotateAroundCenterB);
 
   log.debug('Flush mate solved', {
     translation: translation.toArray(),
@@ -146,34 +164,38 @@ export function checkFlushMate(
   faceRefA: InstanceFaceRef,
   bodyB: Body,
   faceRefB: InstanceFaceRef,
-  tolerance: number = 0.001
-): { satisfied: boolean; distance: number } {
+  tolerance: number = 0.001,
+  offset: number = 0
+): FlushMateCheck {
   const planeA = getFacePlane(bodyA, faceRefA.faceId);
   const planeB = getFacePlane(bodyB, faceRefB.faceId);
 
   if (!planeA || !planeB) {
-    return { satisfied: false, distance: Infinity };
+    return {
+      satisfied: false,
+      distance: Infinity,
+      offsetError: Infinity,
+      angularError: Infinity,
+    };
   }
 
   // Check if normals are anti-parallel
-  const normalA = new THREE.Vector3(...planeA.normal);
-  const normalB = new THREE.Vector3(...planeB.normal);
+  const normalA = new THREE.Vector3(...planeA.normal).normalize();
+  const normalB = new THREE.Vector3(...planeB.normal).normalize();
 
-  const dot = normalA.dot(normalB);
-  if (dot > -1 + tolerance) {
-    // Normals are not anti-parallel
-    return { satisfied: false, distance: Math.abs(dot + 1) };
-  }
+  const dot = THREE.MathUtils.clamp(normalA.dot(normalB), -1, 1);
+  const angularError = Math.acos(THREE.MathUtils.clamp(-dot, -1, 1));
 
-  // Check if origins are coplanar
   const originA = new THREE.Vector3(...planeA.origin);
   const originB = new THREE.Vector3(...planeB.origin);
 
-  // Distance from originB to planeA
   const distance = originB.clone().sub(originA).dot(normalA);
+  const offsetError = Math.abs(distance - offset);
 
   return {
-    satisfied: Math.abs(distance) < tolerance,
+    satisfied: angularError < tolerance && offsetError < tolerance,
     distance,
+    offsetError,
+    angularError,
   };
 }

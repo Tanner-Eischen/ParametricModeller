@@ -8,6 +8,8 @@ import { createModuleLogger } from '../core/logger';
 import { eventBus } from '../core';
 import type { FaceRef } from '../features/offsetFace';
 import { snapToGrid, type SnapSettings, defaultSnapSettings } from './Snapping';
+import { resolveActiveCamera, type ActiveCameraSource } from './ActiveCameraSource';
+import { DEFAULT_TOLERANCE_POLICY } from '../geometry/TolerancePolicy';
 
 const log = createModuleLogger('PushPullGizmo');
 
@@ -23,16 +25,19 @@ export interface PushPullGizmoOptions {
   previewColor?: number;
   /** Snap settings */
   snapSettings?: SnapSettings;
+  /** Notify the viewport when this gizmo acquires or releases pointer ownership. */
+  onDraggingChange?: (dragging: boolean) => void;
 }
 
 /**
  * Default options.
  */
-const defaultGizmoOptions: Required<Omit<PushPullGizmoOptions, 'snapSettings'>> & { snapSettings: SnapSettings } = {
+const defaultGizmoOptions: Required<PushPullGizmoOptions> = {
   arrowColor: 0x00aaff,
   arrowLength: 0.5,
   previewColor: 0xffff00,
   snapSettings: defaultSnapSettings,
+  onDraggingChange: () => undefined,
 };
 
 /**
@@ -49,6 +54,8 @@ interface PushPullState {
   currentDelta: number;
   /** Is currently dragging */
   isDragging: boolean;
+  /** Pointer currently owned by the gizmo, if the drag came from the viewport. */
+  activePointerId: number | null;
 }
 
 /**
@@ -56,10 +63,10 @@ interface PushPullState {
  */
 export class PushPullGizmo {
   private scene: THREE.Scene | null = null;
-  private camera: THREE.Camera | null = null;
+  private cameraSource: ActiveCameraSource | null = null;
   private domElement: HTMLElement | null = null;
 
-  private options: Required<Omit<PushPullGizmoOptions, 'snapSettings'>> & { snapSettings: SnapSettings };
+  private options: Required<PushPullGizmoOptions>;
 
   /** Arrow indicator for drag direction */
   private arrow: THREE.ArrowHelper | null = null;
@@ -71,25 +78,25 @@ export class PushPullGizmo {
   private state: PushPullState | null = null;
 
   /** Event handlers bound to this instance */
-  private boundMouseMove: (event: MouseEvent) => void;
-  private boundMouseUp: (event: MouseEvent) => void;
-  private boundKeyDown: (event: KeyboardEvent) => void;
+  private boundPointerDown: (event: PointerEvent) => void;
+  private boundPointerMove: (event: PointerEvent) => void;
+  private boundPointerUp: (event: PointerEvent) => void;
 
   constructor(options?: PushPullGizmoOptions) {
     this.options = { ...defaultGizmoOptions, ...options };
 
     // Bind event handlers
-    this.boundMouseMove = this.handleMouseMove.bind(this);
-    this.boundMouseUp = this.handleMouseUp.bind(this);
-    this.boundKeyDown = this.handleKeyDown.bind(this);
+    this.boundPointerDown = this.handlePointerDown.bind(this);
+    this.boundPointerMove = this.handlePointerMove.bind(this);
+    this.boundPointerUp = this.handlePointerUp.bind(this);
   }
 
   /**
    * Initialize with Three.js scene and camera.
    */
-  attach(scene: THREE.Scene, camera: THREE.Camera, domElement: HTMLElement): void {
+  attach(scene: THREE.Scene, camera: ActiveCameraSource, domElement: HTMLElement): void {
     this.scene = scene;
-    this.camera = camera;
+    this.cameraSource = camera;
     this.domElement = domElement;
     log.debug('Attached to scene');
   }
@@ -113,6 +120,7 @@ export class PushPullGizmo {
       normal: new THREE.Vector3(...normal).normalize(),
       currentDelta: 0,
       isDragging: false,
+      activePointerId: null,
     };
 
     // Create arrow indicator
@@ -142,9 +150,12 @@ export class PushPullGizmo {
 
     // Add event listeners
     if (this.domElement) {
-      this.domElement.addEventListener('mousemove', this.boundMouseMove);
-      this.domElement.addEventListener('mouseup', this.boundMouseUp);
-      this.domElement.addEventListener('keydown', this.boundKeyDown);
+      // Capture establishes ownership before OrbitControls receives the same
+      // pointerdown on the viewport container.
+      this.domElement.addEventListener('pointerdown', this.boundPointerDown, true);
+      this.domElement.addEventListener('pointermove', this.boundPointerMove, true);
+      this.domElement.addEventListener('pointerup', this.boundPointerUp, true);
+      this.domElement.addEventListener('pointercancel', this.boundPointerUp, true);
     }
 
     // Emit event
@@ -159,9 +170,14 @@ export class PushPullGizmo {
   hide(): void {
     // Remove event listeners
     if (this.domElement) {
-      this.domElement.removeEventListener('mousemove', this.boundMouseMove);
-      this.domElement.removeEventListener('mouseup', this.boundMouseUp);
-      this.domElement.removeEventListener('keydown', this.boundKeyDown);
+      this.domElement.removeEventListener('pointerdown', this.boundPointerDown, true);
+      this.domElement.removeEventListener('pointermove', this.boundPointerMove, true);
+      this.domElement.removeEventListener('pointerup', this.boundPointerUp, true);
+      this.domElement.removeEventListener('pointercancel', this.boundPointerUp, true);
+    }
+    if (this.state?.isDragging) {
+      this.options.onDraggingChange(false);
+      this.releasePointerCapture(this.state.activePointerId);
     }
 
     // Remove arrow
@@ -187,11 +203,15 @@ export class PushPullGizmo {
   /**
    * Update the delta distance during drag.
    */
-  updateDelta(delta: number): void {
+  updateDelta(delta: number, snap = true): void {
     if (!this.state || !this.previewLine) return;
+    if (!Number.isFinite(delta)) {
+      log.warn('Ignored non-finite push/pull distance', { delta });
+      return;
+    }
 
     // Apply snapping if enabled
-    const snappedDelta = this.options.snapSettings.enabled
+    const snappedDelta = snap && this.options.snapSettings.enabled
       ? snapToGrid(delta, this.options.snapSettings.gridStep)
       : delta;
 
@@ -219,30 +239,39 @@ export class PushPullGizmo {
 
     // Update status bar
     eventBus.emit('ui:status', {
-      message: `Push/Pull: ${snappedDelta.toFixed(3)}"`,
+      message: `Push/Pull: ${snappedDelta.toFixed(3)}`,
+      announce: false,
     });
   }
 
   /**
    * Commit the current offset.
    */
-  commit(): void {
-    if (!this.state) return;
+  commit(apply?: (faceRef: FaceRef, distance: number) => boolean): boolean {
+    if (!this.state) return false;
 
     const { faceRef, currentDelta } = this.state;
 
-    if (currentDelta > 0) {
-      eventBus.emit('pushpull:commit', {
-        faceRef,
-        distance: currentDelta,
-      });
+    if (Number.isFinite(currentDelta) && Math.abs(currentDelta) > DEFAULT_TOLERANCE_POLICY.linear) {
+      if (apply && !apply(faceRef, currentDelta)) {
+        log.warn('Push/pull application rejected; preview remains active', { faceRef, distance: currentDelta });
+        return false;
+      }
+      if (!apply) {
+        eventBus.emit('pushpull:commit', {
+          faceRef,
+          distance: currentDelta,
+        });
+      }
 
       log.info('Push/pull committed', { faceRef, distance: currentDelta });
     } else {
-      log.warn('Cannot commit with non-positive distance', { currentDelta });
+      log.warn('Cannot commit with a zero or invalid distance', { currentDelta });
+      return false;
     }
 
     this.hide();
+    return true;
   }
 
   /**
@@ -274,13 +303,22 @@ export class PushPullGizmo {
     return this.state?.currentDelta ?? 0;
   }
 
+  /** True only for the pointer sequence that began on the arrow handle. */
+  ownsPointer(pointerId: number): boolean {
+    return this.state?.isDragging === true && this.state.activePointerId === pointerId;
+  }
+
+  setSnapSettings(settings: SnapSettings): void {
+    this.options.snapSettings = { ...settings };
+  }
+
   /**
    * Dispose of all resources.
    */
   dispose(): void {
     this.hide();
     this.scene = null;
-    this.camera = null;
+    this.cameraSource = null;
     this.domElement = null;
     log.debug('Disposed');
   }
@@ -288,8 +326,10 @@ export class PushPullGizmo {
   /**
    * Handle mouse move during drag.
    */
-  private handleMouseMove(event: MouseEvent): void {
-    if (!this.state || !this.camera) return;
+  private handlePointerMove(event: PointerEvent): void {
+    const camera = this.cameraSource ? resolveActiveCamera(this.cameraSource) : null;
+    if (!this.state?.isDragging || !camera) return;
+    if (this.state.activePointerId !== null && this.state.activePointerId !== event.pointerId) return;
 
     // Calculate mouse position in normalized device coordinates
     const rect = this.domElement?.getBoundingClientRect();
@@ -302,68 +342,98 @@ export class PushPullGizmo {
 
     // Ray from camera through mouse position
     const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(mouse, this.camera);
+    raycaster.setFromCamera(mouse, camera);
 
-    // Project onto the normal line
+    // Find the closest point on the face-normal line to the pointer ray.
+    // Solving the two-line closest-points system preserves the signed axis
+    // parameter. Intersecting the ray with the normal itself would force the
+    // subsequent axis projection to zero by construction.
     const lineOrigin = this.state.startPosition;
     const lineDirection = this.state.normal;
-
-    // Calculate distance along normal
     const rayOrigin = raycaster.ray.origin;
     const rayDir = raycaster.ray.direction;
+    const betweenOrigins = rayOrigin.clone().sub(lineOrigin);
+    const rayAxisDot = rayDir.dot(lineDirection);
+    const denominator = 1 - rayAxisDot * rayAxisDot;
 
-    // Project ray onto normal line
-    const diff = lineOrigin.clone().sub(rayOrigin);
-    const denom = rayDir.dot(lineDirection);
+    if (denominator <= 1e-6) return;
 
-    if (Math.abs(denom) > 0.001) {
-      const t = diff.dot(lineDirection) / denom;
-      const point = rayOrigin.clone().add(rayDir.multiplyScalar(t));
-      const delta = point.clone().sub(lineOrigin).dot(lineDirection);
-
-      this.updateDelta(delta);
-    }
+    const rayOriginProjection = rayDir.dot(betweenOrigins);
+    const axisOriginProjection = lineDirection.dot(betweenOrigins);
+    const delta = (
+      axisOriginProjection - rayAxisDot * rayOriginProjection
+    ) / denominator;
+    this.updateDelta(delta);
+    event.preventDefault();
   }
 
-  /**
-   * Handle mouse up to end drag.
-   */
-  private handleMouseUp(event: MouseEvent): void {
-    if (event.button === 0 && this.state?.isDragging) {
-      this.state.isDragging = false;
-
-      // Commit if we have a positive delta
-      if (this.state.currentDelta > 0) {
-        this.commit();
-      } else {
-        this.cancel();
-      }
-    }
+  private handlePointerDown(event: PointerEvent): void {
+    if (event.button !== 0 || !this.state || this.state.isDragging || !this.isHandleHit(event)) return;
+    this.state.activePointerId = event.pointerId;
+    this.startDrag();
+    this.capturePointer(event.pointerId);
+    event.preventDefault();
   }
 
-  /**
-   * Handle keyboard events.
-   */
-  private handleKeyDown(event: KeyboardEvent): void {
-    if (!this.state) return;
+  /** Handle pointer release or cancellation without committing the preview. */
+  private handlePointerUp(event: PointerEvent): void {
+    if (!this.state?.isDragging) return;
+    if (this.state.activePointerId !== null && this.state.activePointerId !== event.pointerId) return;
 
-    switch (event.key) {
-      case 'Escape':
-        this.cancel();
-        break;
-      case 'Enter':
-        this.commit();
-        break;
-    }
+    const pointerId = this.state.activePointerId;
+    this.state.isDragging = false;
+    this.state.activePointerId = null;
+    this.options.onDraggingChange(false);
+    this.releasePointerCapture(pointerId);
+    event.preventDefault();
+    eventBus.emit('ui:status', {
+      message: Math.abs(this.state.currentDelta) > DEFAULT_TOLERANCE_POLICY.linear
+        ? `Push/Pull preview: ${this.state.currentDelta.toFixed(3)} - press Enter to commit or Escape to cancel`
+        : 'Push/Pull needs a non-zero distance - drag again or press Escape to cancel',
+    });
   }
 
   /**
    * Start a drag operation.
    */
   startDrag(): void {
-    if (this.state) {
+    if (this.state && !this.state.isDragging) {
       this.state.isDragging = true;
+      this.options.onDraggingChange(true);
       log.debug('Drag started');
+    }
+  }
+
+  private isHandleHit(event: PointerEvent): boolean {
+    const camera = this.cameraSource ? resolveActiveCamera(this.cameraSource) : null;
+    const rect = this.domElement?.getBoundingClientRect();
+    if (!camera || !rect || rect.width <= 0 || rect.height <= 0 || !this.arrow) return false;
+
+    const pointer = new THREE.Vector2(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1
+    );
+    const raycaster = new THREE.Raycaster();
+    raycaster.params.Line = { threshold: Math.max(this.options.arrowLength * 0.12, 0.04) };
+    raycaster.setFromCamera(pointer, camera);
+    this.arrow.updateMatrixWorld(true);
+    return raycaster.intersectObject(this.arrow, true).length > 0;
+  }
+
+  private capturePointer(pointerId: number): void {
+    try {
+      this.domElement?.setPointerCapture?.(pointerId);
+    } catch {
+      // Pointer capture can fail if the browser has already canceled the press.
+    }
+  }
+
+  private releasePointerCapture(pointerId: number | null): void {
+    if (pointerId === null) return;
+    try {
+      this.domElement?.releasePointerCapture?.(pointerId);
+    } catch {
+      // Releasing an already-lost pointer is harmless.
     }
   }
 }

@@ -3,7 +3,7 @@
  * Milestone 05: Patterning
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   validateLinearPatternParams,
   rebuildLinearPattern,
@@ -17,7 +17,7 @@ import {
   defaultLinearPatternParams,
   type LinearPatternParams,
 } from '../../src/features/pattern/LinearPatternFeature';
-import { createBoxFeature, rebuildBox, createRebuildEngine, registerBodies, createRebuildContext } from '../../src/features';
+import { createBoxFeature, rebuildBox, registerBodies, createRebuildContext } from '../../src/features';
 import type { FeatureRecord } from '../../src/features';
 
 describe('LinearPatternFeature', () => {
@@ -220,6 +220,7 @@ describe('LinearPatternFeature', () => {
       // Build the source body
       const sourceResult = rebuildBox(sourceFeature, createRebuildContext());
       expect(sourceResult.ok).toBe(true);
+      if (!sourceResult.ok) return;
 
       // Create context with source body
       let context = createRebuildContext();
@@ -239,6 +240,7 @@ describe('LinearPatternFeature', () => {
       const result = rebuildLinearPattern(patternFeature, context);
 
       expect(result.ok).toBe(true);
+      if (!result.ok) return;
       expect(result.bodies).toHaveLength(2); // count=3 means 2 new instances (source not included)
 
       // Check instance IDs
@@ -254,6 +256,7 @@ describe('LinearPatternFeature', () => {
       });
 
       const sourceResult = rebuildBox(sourceFeature, createRebuildContext());
+      if (!sourceResult.ok) return;
       let context = createRebuildContext();
       context = registerBodies(context, sourceFeature.id, sourceResult.bodies);
 
@@ -268,6 +271,7 @@ describe('LinearPatternFeature', () => {
 
       const result = rebuildLinearPattern(patternFeature, context);
       expect(result.ok).toBe(true);
+      if (!result.ok) return;
 
       // Instance 1 should be at offset [1, 0, 0]
       // Instance 2 should be at offset [2, 0, 0]
@@ -283,6 +287,7 @@ describe('LinearPatternFeature', () => {
       });
 
       const sourceResult = rebuildBox(sourceFeature, createRebuildContext());
+      if (!sourceResult.ok) return;
       let context = createRebuildContext();
       context = registerBodies(context, sourceFeature.id, sourceResult.bodies);
 
@@ -297,9 +302,28 @@ describe('LinearPatternFeature', () => {
 
       const result = rebuildLinearPattern(patternFeature, context);
       expect(result.ok).toBe(true);
+      if (!result.ok) return;
 
       // Symmetric count=3 means 2 instances (1 on each side)
       expect(result.bodies).toHaveLength(2);
+    });
+
+    it('keeps even symmetric count inclusive of the source', () => {
+      const sourceFeature = createBoxFeature({ width: 1, depth: 1, height: 1 });
+      const sourceResult = rebuildBox(sourceFeature, createRebuildContext());
+      if (!sourceResult.ok) return;
+      const context = registerBodies(createRebuildContext(), sourceFeature.id, sourceResult.bodies);
+      const feature = createLinearPatternFeature(sourceFeature.id, 4, 1, [1, 0, 0], true);
+      feature.id = 'symmetric-even';
+
+      const result = rebuildLinearPattern(feature, context);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.bodies).toHaveLength(3);
+      const minimumX = result.bodies.map((body) =>
+        Math.min(...[...body.vertices.values()].map((vertex) => vertex.position[0]))
+      ).sort((left, right) => left - right);
+      expect(minimumX).toEqual([-1, 1, 2]);
     });
 
     it('should fail when source feature not found', () => {

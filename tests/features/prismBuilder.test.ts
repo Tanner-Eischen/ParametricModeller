@@ -179,6 +179,34 @@ describe('PrismBuilder', () => {
       expect(body.faces.has('side_3')).toBe(true);
     });
 
+    it('orients side-face normals outward for a counter-clockwise profile', () => {
+      const plane = createWorldConstructionPlane('xy', 0);
+      const profile: Profile2D = {
+        id: '1',
+        sketchId: 's1',
+        loop: [[0, 0], [1, 0], [1, 1], [0, 1]],
+        entityIds: [],
+        isValid: true,
+      };
+
+      const body = buildPrism({ plane, profile, distance: 1, flip: false });
+
+      const expectedNormals = [
+        [0, -1, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+        [-1, 0, 0],
+      ];
+
+      expectedNormals.forEach((expected, index) => {
+        const normal = body.planes.get(`side_${index}`)?.normal;
+        expect(normal).toBeDefined();
+        expected.forEach((component, componentIndex) => {
+          expect(normal?.[componentIndex]).toBeCloseTo(component);
+        });
+      });
+    });
+
     it('should flip extrusion direction when flip is true', () => {
       const plane = createWorldConstructionPlane('xy', 0);
       const profile: Profile2D = {

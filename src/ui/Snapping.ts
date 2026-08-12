@@ -3,9 +3,7 @@
  * Milestone 03: Push/Pull as a Feature
  */
 
-import { createModuleLogger } from '../core/logger';
-
-const log = createModuleLogger('Snapping');
+import { parseNumericInput as parseSharedNumericInput } from '../interaction/NumericInput';
 
 /**
  * Settings for grid snapping.
@@ -41,7 +39,13 @@ export function snapToGrid(value: number, step?: number): number {
   const snapped = Math.round(value / gridStep) * gridStep;
 
   // Handle floating point precision
-  const precision = Math.max(0, Math.ceil(-Math.log10(gridStep)));
+  const stepText = gridStep.toString().toLowerCase();
+  const [coefficient = '', exponentText] = stepText.split('e');
+  const decimalPlaces = coefficient.includes('.')
+    ? coefficient.length - coefficient.indexOf('.') - 1
+    : 0;
+  const exponent = exponentText ? Number(exponentText) : 0;
+  const precision = Math.min(12, Math.max(0, decimalPlaces - exponent));
   return Number(snapped.toFixed(precision));
 }
 
@@ -59,85 +63,10 @@ export function snapToGrid(value: number, step?: number): number {
 export function parseNumericInput(
   input: string
 ): { ok: true; value: number } | { ok: false; error: string } {
-  const trimmed = input.trim().toLowerCase();
-
-  if (!trimmed) {
-    return { ok: false, error: 'Empty input' };
-  }
-
-  // Check for relative operator
-  const isRelative = trimmed.startsWith('+') || trimmed.startsWith('-');
-  const sign = trimmed.startsWith('-') ? -1 : 1;
-  const valuePart = isRelative ? trimmed.substring(1) : trimmed;
-
-  // Parse the value
-  let value: number;
-  let remaining = valuePart.trim();
-
-  // Try to parse as fraction (e.g., "1/2" or "3/4")
-  const fractionMatch = remaining.match(/^(\d+)\s*\/\s*(\d+)/);
-  if (fractionMatch) {
-    const numerator = parseFloat(fractionMatch[1]!);
-    const denominator = parseFloat(fractionMatch[2]!);
-    if (denominator === 0) {
-      return { ok: false, error: 'Division by zero in fraction' };
-    }
-    value = numerator / denominator;
-    remaining = remaining.substring(fractionMatch[0].length).trim();
-  } else {
-    // Try to parse as mixed number (e.g., "1 1/2")
-    const mixedMatch = remaining.match(/^(\d+(?:\.\d+)?)\s+(\d+)\s*\/\s*(\d+)/);
-    if (mixedMatch) {
-      const whole = parseFloat(mixedMatch[1]!);
-      const numerator = parseFloat(mixedMatch[2]!);
-      const denominator = parseFloat(mixedMatch[3]!);
-      if (denominator === 0) {
-        return { ok: false, error: 'Division by zero in fraction' };
-      }
-      value = whole + numerator / denominator;
-      remaining = remaining.substring(mixedMatch[0].length).trim();
-    } else {
-      // Try to parse as decimal number
-      const numberMatch = remaining.match(/^(-?\d+(?:\.\d+)?)/);
-      if (!numberMatch) {
-        return { ok: false, error: 'No valid number found' };
-      }
-      value = parseFloat(numberMatch[1]!);
-      remaining = remaining.substring(numberMatch[0].length).trim();
-    }
-  }
-
-  if (!isFinite(value)) {
-    return { ok: false, error: 'Invalid number' };
-  }
-
-  // Parse unit suffix
-  if (remaining) {
-    // Remove any remaining whitespace
-    const unit = remaining.trim();
-
-    // Convert to inches
-    if (unit === 'in' || unit === 'inch' || unit === 'inches' || unit === '"') {
-      // Already in inches
-    } else if (unit === 'mm' || unit === 'millimeter' || unit === 'millimeters') {
-      value = value / 25.4;
-    } else if (unit === 'cm' || unit === 'centimeter' || unit === 'centimeters') {
-      value = value / 2.54;
-    } else if (unit === 'ft' || unit === 'foot' || unit === 'feet' || unit === "'") {
-      value = value * 12;
-    } else if (unit === 'm' || unit === 'meter' || unit === 'meters') {
-      value = value * 39.3701;
-    } else {
-      return { ok: false, error: `Unknown unit: ${unit}` };
-    }
-  }
-
-  // Apply sign for relative values
-  value = sign * Math.abs(value);
-
-  log.debug('Parsed numeric input', { input, value, isRelative });
-
-  return { ok: true, value };
+  const parsed = parseSharedNumericInput(input);
+  return parsed.ok
+    ? { ok: true, value: parsed.value }
+    : { ok: false, error: parsed.error };
 }
 
 /**

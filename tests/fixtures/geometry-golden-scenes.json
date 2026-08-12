@@ -1,0 +1,79 @@
+[
+  {
+    "id": "cabinet-panel-box",
+    "kind": "box",
+    "parameters": {
+      "width": 12,
+      "depth": 6,
+      "height": 0.75,
+      "anchorMode": "corner",
+      "origin": [-1, 2, 0.25]
+    },
+    "expectedHash": "fnv1a64:2d768a7d35e273d0",
+    "expectedMeasurements": {
+      "boundingBox": {
+        "min": [-1, 2, 0.25],
+        "max": [11, 8, 1],
+        "size": [12, 6, 0.75]
+      },
+      "vertexCount": 8,
+      "edgeCount": 12,
+      "faceCount": 6,
+      "totalEdgeLength": 75,
+      "surfaceArea": 171,
+      "volume": 54
+    }
+  },
+  {
+    "id": "rectangle-extrude",
+    "kind": "extrude",
+    "parameters": {
+      "plane": "xy",
+      "planeOffset": 0,
+      "origin": [1, -2],
+      "width": 4,
+      "height": 3,
+      "distance": 2,
+      "flip": false
+    },
+    "expectedHash": "fnv1a64:35098260fcfa2784",
+    "expectedMeasurements": {
+      "boundingBox": {
+        "min": [1, -2, 0],
+        "max": [5, 1, 2],
+        "size": [4, 3, 2]
+      },
+      "vertexCount": 8,
+      "edgeCount": 12,
+      "faceCount": 6,
+      "totalEdgeLength": 36,
+      "surfaceArea": 52,
+      "volume": 24
+    }
+  },
+  {
+    "id": "rotated-translated-box",
+    "kind": "transform",
+    "parameters": {
+      "width": 2,
+      "depth": 1,
+      "height": 3,
+      "rotationZDegrees": 90,
+      "translation": [10, -4, 2]
+    },
+    "expectedHash": "fnv1a64:cd4e40abec9ff644",
+    "expectedMeasurements": {
+      "boundingBox": {
+        "min": [9, -4, 2],
+        "max": [10, -2, 5],
+        "size": [1, 2, 3]
+      },
+      "vertexCount": 8,
+      "edgeCount": 12,
+      "faceCount": 6,
+      "totalEdgeLength": 24,
+      "surfaceArea": 22,
+      "volume": 6
+    }
+  }
+]

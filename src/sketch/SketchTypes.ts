@@ -17,6 +17,10 @@ export interface PlaneRef {
   faceId?: string;
   /** Body ID containing the face (only if type === 'face') */
   bodyId?: string;
+  /** Feature that produced the referenced body (new face references only) */
+  featureId?: string;
+  /** Stable world-space sketch origin for newly attached face sketches */
+  origin?: [number, number, number];
 }
 
 /**
@@ -138,13 +142,17 @@ export function createWorldPlaneRef(
  */
 export function createFacePlaneRef(
   faceId: string,
-  bodyId: string
+  bodyId: string,
+  featureId?: string,
+  origin?: [number, number, number]
 ): PlaneRef {
   return {
     id: generateId(),
     type: 'face',
     faceId,
     bodyId,
+    ...(featureId ? { featureId } : {}),
+    ...(origin ? { origin: [...origin] } : {}),
   };
 }
 

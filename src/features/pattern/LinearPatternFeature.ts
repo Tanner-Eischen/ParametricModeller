@@ -11,6 +11,7 @@ import type { RebuildHandlerResult } from '../RebuildEngine';
 import { getBodyByFeature } from '../RebuildContext';
 import { translateBody, type Body } from '../../geometry';
 import { createModuleLogger } from '../../core/logger';
+import type { BodyRef } from '../../geometry/SubObjectTypes';
 
 const log = createModuleLogger('LinearPatternFeature');
 
@@ -20,6 +21,8 @@ const log = createModuleLogger('LinearPatternFeature');
 export interface LinearPatternParams {
   /** ID of the source feature to pattern */
   sourceFeatureId: string;
+  /** Exact source body. Optional only for legacy documents. */
+  sourceBodyRef?: BodyRef;
   /** Number of instances to create (including original) */
   count: number;
   /** Spacing between instances */
@@ -74,6 +77,17 @@ export function validateLinearPatternParams(params: Partial<LinearPatternParams>
     diagnostics.push(error('INVALID_DIRECTION', 'Direction vector is required'));
   }
 
+  if (params.sourceBodyRef && (
+    !params.sourceBodyRef.featureId
+    || !params.sourceBodyRef.bodyId
+    || params.sourceBodyRef.featureId !== params.sourceFeatureId
+  )) {
+    diagnostics.push(error(
+      'INVALID_SOURCE_REF',
+      'Source body reference must contain the same feature ID and a body ID'
+    ));
+  }
+
   return diagnostics;
 }
 
@@ -96,10 +110,7 @@ export function rebuildLinearPattern(
   feature: FeatureRecord,
   context: RebuildContext
 ): RebuildHandlerResult {
-  const params: LinearPatternParams = {
-    ...defaultLinearPatternParams,
-    ...(feature.parameters as Partial<LinearPatternParams>),
-  };
+  const params = migrateLinearPatternParams(feature.parameters as Partial<LinearPatternParams>);
 
   // Validate parameters
   const diagnostics = validateLinearPatternParams(params);
@@ -112,7 +123,11 @@ export function rebuildLinearPattern(
   }
 
   // Get the source body
-  const sourceBody = getBodyByFeature(context, params.sourceFeatureId);
+  const sourceBody = params.sourceBodyRef
+    ? context.bodiesByFeature
+      .get(params.sourceBodyRef.featureId)
+      ?.find((body) => body.id === params.sourceBodyRef!.bodyId)
+    : getBodyByFeature(context, params.sourceFeatureId);
 
   if (!sourceBody) {
     return {
@@ -135,19 +150,18 @@ export function rebuildLinearPattern(
   // If not symmetric, we create instances in one direction only
 
   if (params.symmetric) {
-    // For symmetric, create instances on both sides
-    // Example: count=3, spacing=1
-    //   index -1: offset -1
-    //   source (at 0)
-    //   index +1: offset +1
-    const halfCount = Math.floor(count / 2);
+    // Count includes the source. Odd counts are perfectly balanced; even
+    // counts place the one extra occurrence on the positive side.
+    const copyCount = count - 1;
+    const negativeCount = Math.floor(copyCount / 2);
+    const positiveCount = copyCount - negativeCount;
     let instanceIndex = 0;
 
-    for (let i = -halfCount; i <= halfCount; i++) {
-      if (i === 0) {
-        // Skip the source position (source body itself is not included)
-        continue;
-      }
+    const positions = [
+      ...Array.from({ length: negativeCount }, (_, index) => index - negativeCount),
+      ...Array.from({ length: positiveCount }, (_, index) => index + 1),
+    ];
+    for (const i of positions) {
 
       const offset: [number, number, number] = [
         i * spacing * direction[0],
@@ -155,7 +169,7 @@ export function rebuildLinearPattern(
         i * spacing * direction[2],
       ];
 
-      const instanceId = `${sourceBody.id}_lp_${instanceIndex}`;
+      const instanceId = `${sourceBody.id}_${feature.id}_lp_${instanceIndex}`;
       const instance = translateBody(sourceBody, offset, instanceId);
       instance.name = `${sourceBody.name}_lp_${instanceIndex}`;
       bodies.push(instance);
@@ -170,7 +184,7 @@ export function rebuildLinearPattern(
         i * spacing * direction[2],
       ];
 
-      const instanceId = `${sourceBody.id}_lp_${i - 1}`;
+      const instanceId = `${sourceBody.id}_${feature.id}_lp_${i - 1}`;
       const instance = translateBody(sourceBody, offset, instanceId);
       instance.name = `${sourceBody.name}_lp_${i - 1}`;
       bodies.push(instance);
@@ -196,15 +210,17 @@ export function rebuildLinearPattern(
  * Create a linear pattern feature record.
  */
 export function createLinearPatternFeature(
-  sourceFeatureId: string,
+  source: string | BodyRef,
   count = 3,
   spacing = 1,
   direction: [number, number, number] = [1, 0, 0],
   symmetric = false,
   name = 'Linear Pattern'
 ): FeatureRecord {
+  const sourceFeatureId = typeof source === 'string' ? source : source.featureId;
   const params: LinearPatternParams = {
     sourceFeatureId,
+    ...(typeof source === 'string' ? {} : { sourceBodyRef: { ...source } }),
     count,
     spacing,
     direction: normalizeDirection(direction),
@@ -303,5 +319,24 @@ export function updateLinearPatternSymmetric(
  */
 export function getLinearPatternParams(feature: FeatureRecord): LinearPatternParams | null {
   if (feature.type !== LINEAR_PATTERN_FEATURE_TYPE) return null;
-  return feature.parameters as unknown as LinearPatternParams;
+  return migrateLinearPatternParams(feature.parameters as Partial<LinearPatternParams>);
+}
+
+/** Preserve legacy sourceFeatureId-only documents while preferring exact body refs. */
+export function migrateLinearPatternParams(
+  params: Partial<LinearPatternParams>
+): LinearPatternParams {
+  const sourceFeatureId = params.sourceBodyRef?.featureId
+    ?? params.sourceFeatureId
+    ?? defaultLinearPatternParams.sourceFeatureId;
+  return {
+    sourceFeatureId,
+    ...(params.sourceBodyRef ? { sourceBodyRef: { ...params.sourceBodyRef } } : {}),
+    count: params.count ?? defaultLinearPatternParams.count,
+    spacing: params.spacing ?? defaultLinearPatternParams.spacing,
+    direction: params.direction
+      ? [...params.direction] as [number, number, number]
+      : [...defaultLinearPatternParams.direction],
+    symmetric: params.symmetric ?? defaultLinearPatternParams.symmetric,
+  };
 }

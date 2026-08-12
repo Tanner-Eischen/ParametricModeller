@@ -25,6 +25,7 @@ interface PlaneRefLike {
   offset?: number;
   faceId?: string;
   bodyId?: string;
+  featureId?: string;
 }
 
 interface SketchEntityLike {
@@ -47,14 +48,24 @@ interface EventMap {
   'feature:added': { feature: FeatureRecordLike };
   'feature:removed': { featureId: string };
   'feature:selected': { featureId: string };
+  'feature:create-box': {
+    parameters: {
+      width: number;
+      depth: number;
+      height: number;
+      anchorMode: 'corner' | 'center';
+      origin: [number, number, number];
+    };
+  };
   'feature:update': { featureId: string; parameters: Record<string, unknown> };
   'feature:rebuild': { featureId: string; success: boolean };
   'feature:diagnostics': { diagnostics: DiagnosticLike[] };
   'rebuild:complete': { diagnostics: DiagnosticLike[] };
   'rebuild:failed': { diagnostics: DiagnosticLike[] };
-  'ui:status': { message: string };
+  'ui:status': { message: string; announce?: boolean };
   'ui:toast': { message: string; type: 'info' | 'warning' | 'error' | 'success' };
   'ui:property-inspector': { feature: FeatureRecordLike };
+  'ui:property-inspector:clear': {};
   // Sketch mode events (Milestone 02)
   'sketch:enter': { planeRef: PlaneRefLike; sketchId: string };
   'sketch:exit': { sketchId: string };

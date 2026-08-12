@@ -107,7 +107,9 @@ export class Viewport {
     const animate = () => {
       this.animationId = requestAnimationFrame(animate);
       this.cameraControls.update();
-      this.renderer.render(this.scene, this.cameraControls.camera);
+      const camera = this.cameraControls.camera;
+      this.axes.update(camera);
+      this.renderer.render(this.scene, camera);
     };
 
     animate();
@@ -136,6 +138,10 @@ export class Viewport {
 
   getScene(): THREE.Scene {
     return this.scene;
+  }
+
+  getDomElement(): HTMLCanvasElement {
+    return this.renderer.domElement;
   }
 
   getGrid(): Grid {

@@ -1,10 +1,14 @@
 import type { Document } from '../types';
 import { createDefaultDocument } from '../types';
 import { createModuleLogger } from '../core/logger';
+import {
+  CURRENT_SCHEMA_VERSION,
+  migrateDocumentSchema,
+  migrateSketchFeatureToSchemaV03,
+  type MigrationDiagnostic,
+} from './Migrations';
 
 const log = createModuleLogger('Serializer');
-
-const SCHEMA_VERSION = '0.1.0';
 
 export interface SerializeResult {
   ok: true;
@@ -21,6 +25,7 @@ export type SerializeOutcome = SerializeResult | SerializeError;
 export interface DeserializeResult {
   ok: true;
   document: Document;
+  migrationDiagnostics: MigrationDiagnostic[];
 }
 
 export interface DeserializeError {
@@ -35,7 +40,16 @@ export type DeserializeOutcome = DeserializeResult | DeserializeError;
  */
 export function serialize(doc: Document): SerializeOutcome {
   try {
-    const json = JSON.stringify(doc, null, 2);
+    const migration = migrateDocumentSchema(
+      doc as unknown as Record<string, unknown>
+    );
+    if (!migration.ok) {
+      return { ok: false, error: migration.error };
+    }
+    const normalizedDocument = normalizeDocument(
+      migration.document as Partial<Document>
+    );
+    const json = JSON.stringify(normalizedDocument, null, 2);
     log.debug('Document serialized', { size: json.length });
     return { ok: true, json };
   } catch (err) {
@@ -57,20 +71,19 @@ export function deserialize(json: string): DeserializeOutcome {
       return { ok: false, error: 'Invalid document structure' };
     }
 
-    // Check version compatibility
-    const version = parsed.version as string;
-    if (!isVersionCompatible(version)) {
+    const migration = migrateDocumentSchema(parsed as Record<string, unknown>);
+    if (!migration.ok) {
       return {
         ok: false,
-        error: `Incompatible schema version: ${version}. Expected ${SCHEMA_VERSION}.x`,
+        error: `Incompatible schema version: ${migration.error}`,
       };
     }
 
     // Validate and normalize the document
-    const doc = normalizeDocument(parsed);
+    const doc = normalizeDocument(migration.document as Partial<Document>);
 
     log.debug('Document deserialized', { name: doc.metadata.name });
-    return { ok: true, document: doc };
+    return { ok: true, document: doc, migrationDiagnostics: migration.diagnostics };
   } catch (err) {
     const error = err instanceof Error ? err.message : 'Unknown deserialization error';
     log.error('Deserialization failed', error);
@@ -93,40 +106,85 @@ function isDocumentLike(value: unknown): value is Partial<Document> {
 }
 
 /**
- * Check if version is compatible with current schema
- */
-function isVersionCompatible(version: string): boolean {
-  const parts = version.split('.');
-  if (parts.length < 2) return false;
-
-  const major = parseInt(parts[0]!, 10);
-  const minor = parseInt(parts[1]!, 10);
-
-  // Only accept 0.1.x versions for now
-  return major === 0 && minor === 1;
-}
-
-/**
  * Normalize a document to ensure all required fields exist
  */
 function normalizeDocument(partial: Partial<Document>): Document {
   const defaults = createDefaultDocument(partial.metadata?.name);
 
   return {
-    version: partial.version ?? defaults.version,
+    ...partial,
+    version: CURRENT_SCHEMA_VERSION,
     metadata: {
+      ...partial.metadata,
       name: partial.metadata?.name ?? defaults.metadata.name,
       created: partial.metadata?.created ?? defaults.metadata.created,
       modified: partial.metadata?.modified ?? defaults.metadata.modified,
     },
     config: {
+      ...partial.config,
       units: partial.config?.units ?? defaults.config.units,
       gridSpacing: partial.config?.gridSpacing ?? defaults.config.gridSpacing,
       snapEnabled: partial.config?.snapEnabled ?? defaults.config.snapEnabled,
     },
     bodies: partial.bodies ?? [],
-    features: partial.features ?? [],
+    features: migrateLegacyFacePlaneReferences(partial.features ?? []).map(
+      migrateSketchFeatureToSchemaV03
+    ),
+    components: partial.components ?? defaults.components,
+    componentInstances: partial.componentInstances ?? defaults.componentInstances,
+    constraints: partial.constraints ?? defaults.constraints,
+    activeComponentId: partial.activeComponentId ?? defaults.activeComponentId,
+    bodyMetadata: structuredClone(partial.bodyMetadata ?? defaults.bodyMetadata ?? {}),
+    ...(partial.bodyPresentations
+      ? { bodyPresentations: structuredClone(partial.bodyPresentations) }
+      : {}),
   };
+}
+
+/**
+ * Upgrade legacy face sketches from body-only references to the latest earlier
+ * feature that produced that body. Unresolved references remain untouched so
+ * rebuild diagnostics can report them without silently guessing an owner.
+ */
+function migrateLegacyFacePlaneReferences(features: Document['features']): Document['features'] {
+  return features.map((feature, featureIndex) => {
+    if (feature.type !== 'sketch') return feature;
+
+    const planeRef = (feature.parameters as {
+      planeRef?: { type?: unknown; bodyId?: unknown; featureId?: unknown };
+    }).planeRef;
+    if (
+      planeRef?.type !== 'face' ||
+      typeof planeRef.bodyId !== 'string' ||
+      typeof planeRef.featureId === 'string'
+    ) {
+      return feature;
+    }
+
+    let ownerFeatureId: string | undefined;
+    for (let index = featureIndex - 1; index >= 0; index--) {
+      const candidate = features[index];
+      if (candidate?.refsOut.includes(planeRef.bodyId)) {
+        ownerFeatureId = candidate.id;
+        break;
+      }
+    }
+    if (!ownerFeatureId) return feature;
+
+    const refsIn = feature.refsIn.filter(
+      (reference) => reference !== planeRef.bodyId && reference !== ownerFeatureId
+    );
+    refsIn.push(ownerFeatureId);
+
+    return {
+      ...feature,
+      parameters: {
+        ...feature.parameters,
+        planeRef: { ...planeRef, featureId: ownerFeatureId },
+      },
+      refsIn,
+    };
+  });
 }
 
 /**

@@ -3,6 +3,8 @@
  * Provides types for selecting and referencing sub-objects within bodies.
  */
 
+import { DEFAULT_TOLERANCE_POLICY } from './TolerancePolicy';
+
 /**
  * Selection modes for sub-object selection.
  */
@@ -75,7 +77,7 @@ export interface SubObjectSelection {
 /**
  * Default tolerance for planarity checks (in mm).
  */
-export const PLANARITY_TOLERANCE = 0.001;
+export const PLANARITY_TOLERANCE = DEFAULT_TOLERANCE_POLICY.planarity;
 
 /**
  * Default tolerance for screen-space picking (in pixels).
@@ -267,7 +269,7 @@ export function clearSelection(selection: SubObjectSelection): SubObjectSelectio
  * Change the selection mode.
  */
 export function setSelectionMode(
-  selection: SubObjectSelection,
+  _selection: SubObjectSelection,
   mode: SubObjectType
 ): SubObjectSelection {
   // Clear selection when changing modes
@@ -297,9 +299,6 @@ function refsEqual(a: SubObjectRef, b: SubObjectRef): boolean {
 // ============================================================================
 
 import type { Body } from './Body';
-import type { Vertex } from './Vertex';
-import type { Edge } from './Edge';
-import type { Face } from './Face';
 
 /**
  * Get all vertex IDs for a face.

@@ -12,10 +12,38 @@ export {
 } from './FeatureRecord';
 
 export {
+  type FeatureReference,
+  type FeatureOutput,
+  normalizeFeatureReference,
+  getReferencedFeatureId,
+  createSketchOutput,
+  createBodyOutput,
+  getFeatureOutputId,
+} from './FeatureReferences';
+
+export {
+  type DependencyGraph,
+  createDependencyGraph,
+} from './DependencyGraph';
+
+export {
+  type FeatureDependencyOperation,
+  type FeatureDependencyPlanOptions,
+  type FeatureDependencyOperationPlan,
+  planFeatureDependencyOperation,
+  planFeatureRemoval,
+  planFeatureSuppression,
+} from './FeatureDependencyOperations';
+
+export {
   type RebuildContext,
   createRebuildContext,
   setCurrentFeature,
   registerBodies,
+  registerFeatureOutputs,
+  getFeatureById,
+  getFeatureOutputs,
+  resolveSketch,
   getBodiesByFeature,
   getBodyByFeature,
   getAllBodies,
@@ -63,3 +91,18 @@ export * from '../assembly';
 
 // Vertex feature (Milestone 07)
 export * from './vertex';
+
+// Transform features
+export * from './transform';
+
+// Angled cut / end trim feature
+export * from './miter';
+
+// Explicit solid Boolean features
+export * from './boolean';
+
+// Stable reference-based rigid body placement
+export * from './placement';
+
+// Guarded, history-based woodworking joints and manufacturing intent
+export * from './joints';

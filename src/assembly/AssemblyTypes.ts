@@ -18,6 +18,8 @@ export interface Component {
   name: string;
   featureIds: string[];      // Features belonging to this component
   bodyIds: string[];         // Bodies produced (populated during rebuild)
+  visible?: boolean;
+  locked?: boolean;
 }
 
 /**
@@ -31,6 +33,8 @@ export interface ComponentInstance {
   transform: number[];       // 4x4 matrix (column-major)
   lockedAxes: LockedAxes;    // Axes locked by constraints
   grounded: boolean;         // If true, instance cannot move
+  visible?: boolean;
+  locked?: boolean;
 }
 
 /**
@@ -71,6 +75,13 @@ export interface MateConstraint {
   satisfied: boolean;        // Whether constraint is currently satisfied
   errorMessage?: string;     // Error if constraint cannot be solved
   suppressed: boolean;       // Whether this constraint is disabled
+  driving?: boolean;         // False for migrated validate-only constraints
+  status?: 'legacy-validate-only' | 'unsolved' | 'satisfied' | 'unsatisfied' | 'conflicting' | 'broken';
+  /** Authored 0.2 state retained losslessly when migration makes the constraint validate-only. */
+  legacyState?: {
+    driving?: unknown;
+    status?: unknown;
+  };
 }
 
 /**
@@ -134,6 +145,8 @@ export function createComponent(
     name,
     featureIds,
     bodyIds,
+    visible: true,
+    locked: false,
   };
 }
 
@@ -152,6 +165,8 @@ export function createComponentInstance(
     transform: transform ?? createIdentityTransform(),
     lockedAxes: createDefaultLockedAxes(),
     grounded: false,
+    visible: true,
+    locked: false,
   };
 }
 
@@ -174,6 +189,8 @@ export function createMateConstraint(
     offset,
     satisfied: false,
     suppressed: false,
+    driving: true,
+    status: 'unsolved',
   };
 }
 

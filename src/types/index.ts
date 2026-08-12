@@ -15,6 +15,106 @@ export interface Document {
   componentInstances: ComponentInstance[];
   constraints: MateConstraint[];
   activeComponentId: string | null;
+  /** Stable browser metadata retained while a deterministic body is inactive. */
+  bodyPresentations?: Record<string, BodyPresentation>;
+  /** Stable woodworking tags retained through rebuild, suppression, and duplication. */
+  bodyMetadata?: Record<string, BodyWoodworkingMetadata>;
+  /** Reusable renderer-independent drawing definitions. */
+  drawingDefinitions?: ShopDrawingDefinition[];
+  manufacturingDefaults?: {
+    units: 'in' | 'mm';
+    stockAllowance: StockAllowance;
+  };
+}
+
+export interface StockAllowance {
+  length: number;
+  width: number;
+  thickness: number;
+}
+
+export type DrawingScope =
+  | { type: 'document' }
+  | { type: 'bodies'; bodyIds: string[] }
+  | { type: 'component'; componentId: string };
+
+export interface DrawingReference {
+  bodyId: string;
+  topologyId: string;
+  kind: 'vertex' | 'edge' | 'face';
+}
+
+export interface DrawingDimension {
+  id: string;
+  kind: 'linear' | 'horizontal' | 'vertical' | 'angular' | 'diameter';
+  references: DrawingReference[];
+  view: 'front' | 'top' | 'right';
+  position: readonly [number, number];
+  prefix?: string;
+  suffix?: string;
+}
+
+export interface DrawingNote {
+  id: string;
+  text: string;
+  view?: 'front' | 'top' | 'right';
+  position: readonly [number, number];
+  featureId?: string;
+}
+
+export interface ShopDrawingDefinition {
+  id: string;
+  name: string;
+  scope: DrawingScope;
+  views: Array<'front' | 'top' | 'right'>;
+  sheet: {
+    width: number;
+    height: number;
+    orientation: 'portrait' | 'landscape';
+  };
+  scale: 'fit' | number;
+  unit: 'in' | 'mm';
+  precision: number;
+  showHiddenLines: boolean;
+  dimensions: DrawingDimension[];
+  notes: DrawingNote[];
+}
+
+export interface BodyWoodworkingMetadata {
+  /** Feature that owned the body orientation when these axes were authored. */
+  sourceFeatureId?: string;
+  isBoard: boolean;
+  label: string;
+  material: {
+    id: string;
+    species: string;
+    grade?: string;
+    stockCode?: string;
+    densityKgM3?: number;
+  };
+  grainAxis: readonly [number, number, number];
+  thicknessAxis: readonly [number, number, number];
+  grainPattern?: 'straight' | 'rift' | 'quarter' | 'flat' | 'end' | 'mixed';
+  partNumber?: string;
+  notes?: string;
+  stockAllowance?: Partial<StockAllowance>;
+  bodyFrame?: {
+    origin: readonly [number, number, number];
+    xAxis: readonly [number, number, number];
+    yAxis: readonly [number, number, number];
+    zAxis: readonly [number, number, number];
+    provenance?: {
+      kind: 'derived' | 'authored';
+      source: string;
+      sourceFeatureId?: string;
+    };
+  };
+}
+
+export interface BodyPresentation {
+  name: string;
+  visible: boolean;
+  locked: boolean;
 }
 
 // Assembly types (Milestone 06)
@@ -23,6 +123,8 @@ export interface Component {
   name: string;
   featureIds: string[];
   bodyIds: string[];
+  visible?: boolean;
+  locked?: boolean;
 }
 
 export interface ComponentInstance {
@@ -32,6 +134,8 @@ export interface ComponentInstance {
   transform: number[];
   lockedAxes: LockedAxes;
   grounded: boolean;
+  visible?: boolean;
+  locked?: boolean;
 }
 
 export interface LockedAxes {
@@ -53,6 +157,9 @@ export interface MateConstraint {
   satisfied: boolean;
   errorMessage?: string;
   suppressed: boolean;
+  /** New constraints drive geometry; migrated 0.2 constraints validate only. */
+  driving?: boolean;
+  status?: 'legacy-validate-only' | 'unsolved' | 'satisfied' | 'unsatisfied' | 'conflicting' | 'broken';
 }
 
 export interface InstanceFaceRef {
@@ -99,6 +206,11 @@ export type FeatureType =
   | 'boolean_subtract'
   | 'boolean_intersect'
   | 'mirror'
+  | 'rotateBody'
+  | 'joinBodies'
+  | 'bodyBoolean'
+  | 'transformBodies'
+  | 'woodJoint'
   | 'pattern_linear'
   | 'pattern_circular'
   | 'createComponent'
@@ -132,7 +244,7 @@ export function createDefaultAppConfig(): AppConfig {
 export function createDefaultDocument(name = 'Untitled'): Document {
   const now = new Date().toISOString();
   return {
-    version: '0.1.0',
+    version: '0.3.0',
     metadata: {
       name,
       created: now,
@@ -146,6 +258,12 @@ export function createDefaultDocument(name = 'Untitled'): Document {
     componentInstances: [],
     constraints: [],
     activeComponentId: null,
+    bodyMetadata: {},
+    drawingDefinitions: [],
+    manufacturingDefaults: {
+      units: 'in',
+      stockAllowance: { length: 0, width: 0, thickness: 0 },
+    },
   };
 }
 

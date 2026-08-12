@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { DEFAULT_TOLERANCE_POLICY } from './TolerancePolicy';
 
 /**
  * Orthonormal basis for a plane in 3D space.
@@ -107,7 +108,7 @@ export function projectPoint(plane: Plane, point: [number, number, number]): [nu
 export function pointOnPlane(
   plane: Plane,
   point: [number, number, number],
-  tolerance = 1e-6
+  tolerance = DEFAULT_TOLERANCE_POLICY.linear
 ): boolean {
   return Math.abs(distanceToPoint(plane, point)) < tolerance;
 }

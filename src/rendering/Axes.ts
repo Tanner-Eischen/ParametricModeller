@@ -4,6 +4,7 @@ import { createModuleLogger } from '../core/logger';
 const log = createModuleLogger('Axes');
 
 export interface AxesOptions {
+  /** Size of the positive-direction arrow markers. */
   size?: number;
   lineWidth?: number;
   xColor?: number;
@@ -14,109 +15,92 @@ export interface AxesOptions {
 const DEFAULT_OPTIONS: Required<AxesOptions> = {
   size: 2,
   lineWidth: 2,
-  xColor: 0xff0000, // Red for X
-  yColor: 0x00ff00, // Green for Y
-  zColor: 0x0000ff, // Blue for Z
+  xColor: 0xff4444,
+  yColor: 0x44ff44,
+  zColor: 0x4488ff,
 };
 
+const NDC_FRUSTUM_CORNERS = [
+  [-1, -1, -1],
+  [-1, -1, 1],
+  [-1, 1, -1],
+  [-1, 1, 1],
+  [1, -1, -1],
+  [1, -1, 1],
+  [1, 1, -1],
+  [1, 1, 1],
+] as const;
+
+/**
+ * Camera-relative world reference axes. The rendered segments are finite for
+ * WebGL, but are extended beyond the active camera frustum every frame so they
+ * behave as infinite bidirectional construction lines at any supported zoom.
+ */
 export class Axes {
-  group: THREE.Group;
-  private axesHelper: THREE.AxesHelper;
-  private customAxes: THREE.Group;
-  private options: Required<AxesOptions>;
+  readonly group = new THREE.Group();
+
+  private readonly options: Required<AxesOptions>;
+  private readonly lineGeometry = new THREE.BufferGeometry();
+  private readonly lineMaterial: THREE.LineBasicMaterial;
+  private readonly lines: THREE.LineSegments;
+  private readonly frustumCorner = new THREE.Vector3();
+  private markerGroup: THREE.Group;
+  private currentExtent = 1;
 
   constructor(options: AxesOptions = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
-    this.group = new THREE.Group();
 
-    // Use Three.js AxesHelper for basic implementation
-    this.axesHelper = new THREE.AxesHelper(this.options.size);
-    this.group.add(this.axesHelper);
+    this.lineGeometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(new Float32Array(18), 3)
+    );
+    this.lineGeometry.setAttribute(
+      'color',
+      new THREE.BufferAttribute(this.createAxisColors(), 3)
+    );
+    this.lineMaterial = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      linewidth: this.options.lineWidth,
+      transparent: true,
+      opacity: 0.78,
+      // The X (red) and Z (blue) axes lie in the y=0 plane — the same plane as
+      // the grid — so by default they z-fight against the grid lines and vanish.
+      // Draw the axes on top of everything (grid included) by disabling depth
+      // testing and rendering them last.
+      depthTest: false,
+    });
+    this.lines = new THREE.LineSegments(this.lineGeometry, this.lineMaterial);
+    this.lines.name = 'infinite-reference-axes';
+    this.lines.frustumCulled = false;
+    this.lines.renderOrder = 999;
+    this.group.add(this.lines);
 
-    // Create custom axes with labels (more visible)
-    this.customAxes = this.createCustomAxes();
-    this.group.add(this.customAxes);
+    this.markerGroup = this.createDirectionMarkers();
+    this.group.add(this.markerGroup);
+    this.writeAxisPositions(this.currentExtent);
 
-    log.debug('Axes created', this.options);
+    log.debug('Camera-relative axes created', this.options);
   }
 
-  private createCustomAxes(): THREE.Group {
-    const group = new THREE.Group();
-    const { size, xColor, yColor, zColor } = this.options;
+  update(camera: THREE.PerspectiveCamera | THREE.OrthographicCamera): void {
+    const nextExtent = this.calculateRequiredExtent(camera);
+    if (Math.abs(nextExtent - this.currentExtent) <= Math.max(1, nextExtent) * 1e-6) return;
+    this.currentExtent = nextExtent;
+    this.writeAxisPositions(nextExtent);
+  }
 
-    // X axis (red)
-    const xGeometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(size, 0, 0),
-    ]);
-    const xMaterial = new THREE.LineBasicMaterial({ color: xColor, linewidth: 2 });
-    const xLine = new THREE.Line(xGeometry, xMaterial);
-    group.add(xLine);
-
-    // Y axis (green)
-    const yGeometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(0, size, 0),
-    ]);
-    const yMaterial = new THREE.LineBasicMaterial({ color: yColor, linewidth: 2 });
-    const yLine = new THREE.Line(yGeometry, yMaterial);
-    group.add(yLine);
-
-    // Z axis (blue)
-    const zGeometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(0, 0, size),
-    ]);
-    const zMaterial = new THREE.LineBasicMaterial({ color: zColor, linewidth: 2 });
-    const zLine = new THREE.Line(zGeometry, zMaterial);
-    group.add(zLine);
-
-    // Add arrowheads
-    const arrowSize = size * 0.1;
-    const arrowRadius = size * 0.02;
-
-    // X arrow
-    const xArrowGeom = new THREE.ConeGeometry(arrowRadius, arrowSize, 8);
-    const xArrowMat = new THREE.MeshBasicMaterial({ color: xColor });
-    const xArrow = new THREE.Mesh(xArrowGeom, xArrowMat);
-    xArrow.position.set(size, 0, 0);
-    xArrow.rotation.z = -Math.PI / 2;
-    group.add(xArrow);
-
-    // Y arrow
-    const yArrowGeom = new THREE.ConeGeometry(arrowRadius, arrowSize, 8);
-    const yArrowMat = new THREE.MeshBasicMaterial({ color: yColor });
-    const yArrow = new THREE.Mesh(yArrowGeom, yArrowMat);
-    yArrow.position.set(0, size, 0);
-    group.add(yArrow);
-
-    // Z arrow
-    const zArrowGeom = new THREE.ConeGeometry(arrowRadius, arrowSize, 8);
-    const zArrowMat = new THREE.MeshBasicMaterial({ color: zColor });
-    const zArrow = new THREE.Mesh(zArrowGeom, zArrowMat);
-    zArrow.position.set(0, 0, size);
-    zArrow.rotation.x = Math.PI / 2;
-    group.add(zArrow);
-
-    return group;
+  getCurrentExtent(): number {
+    return this.currentExtent;
   }
 
   setSize(size: number): void {
+    if (!Number.isFinite(size) || size <= 0) return;
     this.options.size = size;
-
-    // Remove old axes
-    this.group.remove(this.axesHelper);
-    this.group.remove(this.customAxes);
-    this.axesHelper.dispose();
-
-    // Create new axes with updated size
-    this.axesHelper = new THREE.AxesHelper(size);
-    this.group.add(this.axesHelper);
-
-    this.customAxes = this.createCustomAxes();
-    this.group.add(this.customAxes);
-
-    log.debug('Axes size updated', { size });
+    this.group.remove(this.markerGroup);
+    this.disposeGroup(this.markerGroup);
+    this.markerGroup = this.createDirectionMarkers();
+    this.group.add(this.markerGroup);
+    log.debug('Axes marker size updated', { size });
   }
 
   setVisible(visible: boolean): void {
@@ -125,15 +109,104 @@ export class Axes {
   }
 
   dispose(): void {
-    this.axesHelper.dispose();
-    this.customAxes.traverse((child) => {
-      if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
-        child.geometry.dispose();
-        if (child.material instanceof THREE.Material) {
-          child.material.dispose();
-        }
+    this.lineGeometry.dispose();
+    this.lineMaterial.dispose();
+    this.disposeGroup(this.markerGroup);
+    log.debug('Axes disposed');
+  }
+
+  private calculateRequiredExtent(
+    camera: THREE.PerspectiveCamera | THREE.OrthographicCamera
+  ): number {
+    camera.updateProjectionMatrix();
+    camera.updateWorldMatrix(true, false);
+
+    let maxWorldCoordinate = 0;
+    for (const [x, y, z] of NDC_FRUSTUM_CORNERS) {
+      this.frustumCorner.set(x, y, z).unproject(camera);
+      maxWorldCoordinate = Math.max(
+        maxWorldCoordinate,
+        Math.abs(this.frustumCorner.x),
+        Math.abs(this.frustumCorner.y),
+        Math.abs(this.frustumCorner.z)
+      );
+    }
+
+    return Math.max(1, camera.far, maxWorldCoordinate) * 1.1;
+  }
+
+  private writeAxisPositions(extent: number): void {
+    const positions = this.lineGeometry.getAttribute('position') as THREE.BufferAttribute;
+    positions.setXYZ(0, -extent, 0, 0);
+    positions.setXYZ(1, extent, 0, 0);
+    positions.setXYZ(2, 0, -extent, 0);
+    positions.setXYZ(3, 0, extent, 0);
+    positions.setXYZ(4, 0, 0, -extent);
+    positions.setXYZ(5, 0, 0, extent);
+    positions.needsUpdate = true;
+  }
+
+  private createAxisColors(): Float32Array {
+    const colors = new Float32Array(18);
+    const axisColors = [
+      new THREE.Color(this.options.xColor),
+      new THREE.Color(this.options.yColor),
+      new THREE.Color(this.options.zColor),
+    ];
+    axisColors.forEach((color, axis) => {
+      color.toArray(colors, axis * 6);
+      color.toArray(colors, axis * 6 + 3);
+    });
+    return colors;
+  }
+
+  private createDirectionMarkers(): THREE.Group {
+    const group = new THREE.Group();
+    group.name = 'reference-axis-direction-markers';
+    const { size } = this.options;
+    const markerLength = size * 0.1;
+    const markerRadius = size * 0.025;
+    const descriptors = [
+      { color: this.options.xColor, position: [size, 0, 0] as const, rotation: [0, 0, -Math.PI / 2] as const },
+      { color: this.options.yColor, position: [0, size, 0] as const, rotation: [0, 0, 0] as const },
+      { color: this.options.zColor, position: [0, 0, size] as const, rotation: [Math.PI / 2, 0, 0] as const },
+    ];
+
+    for (const descriptor of descriptors) {
+      const marker = new THREE.Mesh(
+        new THREE.ConeGeometry(markerRadius, markerLength, 8),
+        new THREE.MeshBasicMaterial({
+          color: descriptor.color,
+          // Draw the direction markers on top of the grid too.
+          depthTest: false,
+        })
+      );
+      marker.position.set(
+        descriptor.position[0],
+        descriptor.position[1],
+        descriptor.position[2]
+      );
+      marker.rotation.set(
+        descriptor.rotation[0],
+        descriptor.rotation[1],
+        descriptor.rotation[2]
+      );
+      marker.renderOrder = 999;
+      marker.frustumCulled = false;
+      group.add(marker);
+    }
+    return group;
+  }
+
+  private disposeGroup(group: THREE.Group): void {
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      child.geometry.dispose();
+      if (Array.isArray(child.material)) {
+        child.material.forEach((material) => material.dispose());
+      } else {
+        child.material.dispose();
       }
     });
-    log.debug('Axes disposed');
   }
 }

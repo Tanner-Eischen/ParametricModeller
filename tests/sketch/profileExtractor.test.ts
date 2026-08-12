@@ -10,6 +10,7 @@ import {
   getProfileCentroid,
   getProfileBounds,
   createSketch,
+  createLineEntity,
   createRectangleEntity,
   createWorldPlaneRef,
   addEntityToSketch,
@@ -48,6 +49,43 @@ describe('ProfileExtractor', () => {
       expect(profiles).toHaveLength(2);
     });
 
+    it('should extract a closed profile from connected line segments', () => {
+      const planeRef = createWorldPlaneRef('xy');
+      let sketch = createSketch(planeRef);
+      const lines = [
+        createLineEntity([0, 0], [2, 0]),
+        createLineEntity([2, 0], [2, 1]),
+        createLineEntity([2, 1], [0, 1]),
+        createLineEntity([0, 1], [0, 0]),
+      ];
+
+      for (const line of lines) {
+        sketch = addEntityToSketch(sketch, line);
+      }
+
+      const profiles = extractProfiles(sketch);
+
+      expect(profiles).toHaveLength(1);
+      expect(profiles[0]?.loop).toEqual([[0, 0], [2, 0], [2, 1], [0, 1]]);
+      expect(profiles[0]?.entityIds).toHaveLength(4);
+    });
+
+    it('should ignore open line chains that do not form a closed loop', () => {
+      const planeRef = createWorldPlaneRef('xy');
+      let sketch = createSketch(planeRef);
+      const lines = [
+        createLineEntity([0, 0], [2, 0]),
+        createLineEntity([2, 0], [2, 1]),
+        createLineEntity([2, 1], [0, 1]),
+      ];
+
+      for (const line of lines) {
+        sketch = addEntityToSketch(sketch, line);
+      }
+
+      expect(extractProfiles(sketch)).toHaveLength(0);
+    });
+
     it('should skip invalid rectangles', () => {
       const planeRef = createWorldPlaneRef('xy');
       const sketch = createSketch(planeRef);
@@ -73,6 +111,25 @@ describe('ProfileExtractor', () => {
 
       expect(profile).toBeDefined();
       expect(profile?.isValid).toBe(true);
+    });
+
+    it('should return a line-loop profile by index', () => {
+      const planeRef = createWorldPlaneRef('xy');
+      let sketch = createSketch(planeRef);
+      const lines = [
+        createLineEntity([0, 0], [1, 0]),
+        createLineEntity([1, 0], [1, 1]),
+        createLineEntity([1, 1], [0, 1]),
+        createLineEntity([0, 1], [0, 0]),
+      ];
+
+      for (const line of lines) {
+        sketch = addEntityToSketch(sketch, line);
+      }
+
+      const profile = getProfileByIndex(sketch, 0);
+      expect(profile).toBeDefined();
+      expect(profile?.entityIds).toHaveLength(4);
     });
 
     it('should return undefined for out-of-bounds index', () => {
