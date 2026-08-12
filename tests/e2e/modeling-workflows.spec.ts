@@ -1375,11 +1375,9 @@ test('previews and commits an exact body copy', async ({ page }) => {
   await expect(page.locator('#status-left')).toContainText('Previewing Copy 2');
   await page.keyboard.press('Enter');
 
-  // The duplicate commits as an independent cloned box (editable dimensions),
-  // not a dependent moveCopy feature.
-  await expect(feature(page, 'box')).toHaveCount(2);
-  await expect(feature(page, 'moveCopy')).toHaveCount(0);
-  await expect(feature(page, 'box').filter({ hasText: 'Copy 2' })).toHaveCount(1);
+  await expect(feature(page, 'box')).toHaveCount(1);
+  await expect(feature(page, 'moveCopy')).toHaveCount(1);
+  await expect(feature(page, 'moveCopy')).toContainText('Copy 2');
   await expect(page.locator('#status-left')).toContainText('Added Copy 2');
 });
 
@@ -1448,23 +1446,17 @@ test('Enter commits the exact displacement from the Duplicate Body task', async 
   await page.locator('#context-task-field-move-copy-x').fill('2 in');
   await page.keyboard.press('Enter');
 
-  // The duplicate commits as an independent cloned box whose origin reflects
-  // the exact X displacement (2 in), rather than a moveCopy translation param.
-  const clonedOrigin = await page.evaluate(() => {
+  const placement = await page.evaluate(() => {
     const app = (window as Window & { app?: {
       features: Array<{
         type: string;
-        name: string;
-        parameters: { origin?: [number, number, number] };
+        parameters: { mode?: string; translation?: [number, number, number] };
       }>;
     } }).app!;
-    const clone = app.features.find(
-      (candidate) => candidate.type === 'box' && candidate.name === 'Copy 2',
-    );
-    return clone?.parameters.origin ?? null;
+    const params = app.features.find((candidate) => candidate.type === 'moveCopy')?.parameters;
+    return params ? { mode: params.mode, translation: params.translation } : null;
   });
-  expect(clonedOrigin).not.toBeNull();
-  expect(clonedOrigin![0]).toBeCloseTo(2, 5);
+  expect(placement).toEqual({ mode: 'copy', translation: [2, 0, 0] });
   await expect(page.locator('#status-left')).toContainText('Added Copy 2');
 });
 

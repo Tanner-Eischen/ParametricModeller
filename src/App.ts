@@ -97,7 +97,7 @@ import {
 import { DocumentManager, saveToFile, loadFromFile, AutosaveManager, RecentFilesStore, type RecentFileEntry } from './persistence';
 import type { Document, Body, BodyPresentation, BodyWoodworkingMetadata, ShopDrawingDefinition } from './types';
 import type { Body as BRepBody } from './geometry';
-import { DEFAULT_TOLERANCE_POLICY, checkPlanarityPreservation, getBodyBoundingBox, getConstructionPlaneFromRef, getFaceVertexIds, getOrderedLoopVertices, createVertexRef, offsetFace, translateBody, type EdgeRef, type SubObjectType, type VertexRef } from './geometry';
+import { DEFAULT_TOLERANCE_POLICY, checkPlanarityPreservation, getBodyBoundingBox, getConstructionPlaneFromRef, getFaceVertexIds, getOrderedLoopVertices, createVertexRef, offsetFace, type EdgeRef, type SubObjectType, type VertexRef } from './geometry';
 import {
   createRebuildEngine,
   rebuildBox,
@@ -149,7 +149,6 @@ import {
   createMoveCopyFeature,
   BAKE_BODY_FEATURE_TYPE,
   rebuildBakeBody,
-  createBakeBodyFeature,
   type MoveVertexParams,
   type RotateBodyParams,
   type MoveCopyParams,
@@ -5615,12 +5614,6 @@ export class App {
       return false;
     }
 
-    // Copy previews commit as independent bodies — a first-class body that
-    // survives source deletion and is editable with every tool — rather than a
-    // dependent translate-of-source. See convertCopyPreviewToBake for details.
-    const replacement = this.convertCopyPreviewToBake(feature);
-    const committedFeature = replacement ?? feature;
-
     const result = this.rebuildAll(`Validate ${this.featurePreviewHistoryLabel}`, {
       trackHistory: false,
     });
@@ -5640,64 +5633,10 @@ export class App {
     this.removeMoveCopyPreviewClone();
     this.gizmos.releaseAll();
     this.clearFeaturePreviewState();
-    this.selectFeatureById(committedFeature.id);
-    eventBus.emit('ui:status', { message: `Added ${committedFeature.name}` });
+    this.selectFeatureById(feature.id);
+    eventBus.emit('ui:status', { message: `Added ${feature.name}` });
     this.refreshUiChrome();
     return true;
-  }
-
-  /**
-   * Convert a moveCopy *copy* preview into an independent feature so the
-   * committed result does not depend on its source. Box sources deep-clone into
-   * a new independent box (keeping width/depth/height editable); other sources
-   * snapshot into a baked body. Move mode and non-moveCopy previews are left
-   * alone (returns null). this.features and featurePreviewFeatureId are updated
-   * in place when a conversion happens.
-   */
-  private convertCopyPreviewToBake(feature: FeatureRecord): FeatureRecord | null {
-    if (feature.type !== MOVE_COPY_FEATURE_TYPE) return null;
-    const params = feature.parameters as unknown as MoveCopyParams;
-    if (params.mode !== 'copy' || !params.sourceBodyRef?.bodyId) return null;
-
-    const sourceBody = this.rebuiltBodies.find(
-      (body) => body.id === params.sourceBodyRef!.bodyId,
-    );
-    if (!sourceBody) return null;
-
-    const [tx, ty, tz] = params.translation ?? [0, 0, 0];
-    const sourceFeature = this.getFeatureById(params.sourceBodyRef!.featureId);
-    let replacement: FeatureRecord;
-
-    if (sourceFeature?.type === BOX_FEATURE_TYPE) {
-      // Deep-clone the box so the copy is a fully independent, dimension-editable
-      // body — the user can edit its width/depth/height exactly like the original.
-      const box = sourceFeature.parameters as unknown as BoxParams;
-      const origin = box.origin ?? [0, 0, 0];
-      replacement = createBoxFeature(
-        {
-          width: box.width,
-          depth: box.depth,
-          height: box.height,
-          anchorMode: box.anchorMode ?? 'corner',
-          origin: [origin[0] + tx, origin[1] + ty, origin[2] + tz],
-        },
-        feature.name,
-      );
-    } else {
-      // Non-primitive source: snapshot the translated geometry as an independent
-      // baked body (editable via tools, survives source deletion).
-      const translated = translateBody(sourceBody, [tx, ty, tz], `${sourceBody.id}_copy`);
-      replacement = createBakeBodyFeature(translated, feature.name, params.sourceBodyRef!.featureId);
-    }
-
-    const index = this.features.findIndex((candidate) => candidate.id === feature.id);
-    if (index === -1) {
-      this.features.push(replacement);
-    } else {
-      this.features[index] = replacement;
-    }
-    this.featurePreviewFeatureId = replacement.id;
-    return replacement;
   }
 
   private cancelFeaturePreview(): void {
