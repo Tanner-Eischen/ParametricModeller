@@ -96,6 +96,13 @@ async function expandSection(page: Page, title: string): Promise<void> {
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
 }
 
+async function expandEditHistory(page: Page): Promise<void> {
+  await expandSection(page, 'Model browser');
+  const toggle = page.getByRole('button', { name: /Edit history/ });
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+}
+
 async function expectLatestSketchSegmentCount(page: Page, expected: number): Promise<void> {
   await expect.poll(() => page.evaluate(() => {
     const app = (window as Window & { app?: {
@@ -557,7 +564,7 @@ test('selects and manipulates a body directly with both sidebars collapsed', asy
     'aria-expanded',
     'true',
   );
-  for (const label of ['Width (X)', 'Depth (Y)', 'Height (Z)', 'X', 'Y', 'Z']) {
+  for (const label of ['Width (X)', 'Height (Y)', 'Depth (Z)', 'X', 'Y', 'Z']) {
     await expect(properties.getByLabel(label, { exact: true })).toBeVisible();
   }
   await properties.getByLabel('Width (X)', { exact: true }).fill('2 in');
@@ -825,7 +832,7 @@ test('starts Push/Pull from the selected face without asking for the face again'
   await expect(selection.getByTestId('selection-action-push-pull')).toBeVisible();
 });
 
-test('exposes labeled properties and live application status', async ({ page }) => {
+test('exposes labeled properties and live status while hiding empty diagnostics', async ({ page }) => {
   await command(page, 'addBox').click();
   const status = page.locator('#status-left');
   await expect(status).toHaveAttribute('role', 'status');
@@ -841,8 +848,8 @@ test('exposes labeled properties and live application status', async ({ page }) 
     await expect(page.locator(`label[for="${id}"]`)).toHaveCount(1);
   }
 
-  await expandSection(page, 'Diagnostics');
-  await expect(page.getByRole('region', { name: 'Model diagnostics' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Diagnostics', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Model diagnostics' })).toHaveCount(0);
 });
 
 test('draws a rectangle sketch and extrudes it', async ({ page }) => {
@@ -900,7 +907,7 @@ test('starts an empty face sketch and uses it for an explicitly targeted cut', a
   await expandSection(page, 'Properties');
   const properties = page.getByTestId('panel-section-properties');
   await properties.getByLabel('Width (X)').fill('20');
-  await properties.getByLabel('Depth (Y)').fill('20');
+  await properties.getByLabel('Height (Y)').fill('20');
   await properties.getByRole('button', { name: 'Apply', exact: true }).click();
   await command(page, 'fitView').click();
 
@@ -1268,6 +1275,7 @@ test('reload preserves sketch IDs and allocates the next collision-free edit nam
 
   const dismissQuickStart = page.getByRole('button', { name: 'Dismiss quick start' });
   if (await dismissQuickStart.isVisible()) await dismissQuickStart.click();
+  await expandEditHistory(page);
   await feature(page, 'sketch').locator('[data-role="name"]').click();
   await page.getByRole('button', { name: 'Line', exact: true }).click();
   const reloadedBounds = await canvas.boundingBox();
@@ -1315,6 +1323,7 @@ test('undo cancels an active sketch preview before navigating history', async ({
   await draw(45);
 
   await command(page, 'undo').click();
+  await expandEditHistory(page);
   await feature(page, 'sketch').locator('[data-role="name"]').click();
   await expectLatestSketchSegmentCount(page, 0);
   await page.getByRole('button', { name: 'Exit sketch', exact: true }).click();
@@ -1605,6 +1614,7 @@ test('transform commands require an explicit body and honor preview cancel or co
   }
 
   const selectBox = async () => {
+    await expandEditHistory(page);
     await feature(page, 'box').locator('[data-role="name"]').click();
   };
 
@@ -1653,9 +1663,13 @@ test('transform commands require an explicit body and honor preview cancel or co
   ));
   await command(page, 'addRotate').click();
   await expect(page.locator('#status-left')).toContainText('Previewing Rotate');
-  await expect(feature(page, 'rotateBody')).toHaveCount(1);
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { app?: { features: Array<{ type: string }> } }
+  ).app!.features.some((candidate) => candidate.type === 'rotateBody'))).toBe(true);
   await page.keyboard.press('Escape');
-  await expect(feature(page, 'rotateBody')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { app?: { features: Array<{ type: string }> } }
+  ).app!.features.some((candidate) => candidate.type === 'rotateBody'))).toBe(false);
   const afterRotateCancel = await page.evaluate(() => JSON.stringify(
     (window as Window & { app?: { buildDocumentSnapshot(): unknown } }).app!.buildDocumentSnapshot()
   ));
@@ -2144,7 +2158,7 @@ test('manages history and body state from the model browser', async ({ page }) =
   await command(page, 'addBox').click();
   await command(page, 'addDuplicate').click();
   await page.keyboard.press('Enter');
-  await expandSection(page, 'Model browser');
+  await expandEditHistory(page);
 
   const browser = page.getByTestId('model-browser');
   const boxRow = feature(page, 'box');
@@ -2217,7 +2231,7 @@ test('applies sticky task-panel numeric input before committing a sketch tool', 
 
 test('retains body presentation through suppress and resume', async ({ page }) => {
   await command(page, 'addBox').click();
-  await expandSection(page, 'Model browser');
+  await expandEditHistory(page);
   await expandSection(page, 'Properties');
   const browser = page.getByTestId('model-browser');
   let bodyRow = browser.locator('[data-node-kind="body"]').first();
