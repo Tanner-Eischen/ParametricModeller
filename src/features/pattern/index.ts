@@ -45,5 +45,15 @@ export {
   getDuplicateParams,
 } from './DuplicateFeature';
 
+// Circular Pattern
+export {
+  type CircularPatternParams,
+  defaultCircularPatternParams,
+  CIRCULAR_PATTERN_FEATURE_TYPE,
+  validateCircularPatternParams,
+  rebuildCircularPattern,
+  createCircularPatternFeature,
+} from './CircularPatternFeature';
+
 // Re-export from features index for convenience
 export { createDuplicateFeature as createDuplicate } from './DuplicateFeature';

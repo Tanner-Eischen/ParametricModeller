@@ -1,0 +1,7 @@
+{
+  "artifactBaseName": "parametric-modeler-web",
+  "entryPoint": "index.html",
+  "format": "zip",
+  "runtime": "static-web-host",
+  "requiredPaths": ["index.html", "assets"]
+}

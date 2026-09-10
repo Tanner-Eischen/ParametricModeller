@@ -210,7 +210,8 @@ export class CommandToolbar {
   private readCollapsedGroupsState(): Set<CommandGroup> {
     const stored = this.readStoredToolsPreference();
     if (stored) return new Set(stored as CommandGroup[]);
-    // First run: expand the modeling groups, fold the chrome groups into chips.
+    // First run: expand the modeling groups (see DEFAULT_EXPANDED_TOOLBAR_GROUPS) and
+    // fold the chrome groups (View/File/Output/Help) into chips.
     return new Set(
       TOOLBAR_GROUP_ORDER.filter((group) => !DEFAULT_EXPANDED_TOOLBAR_GROUPS.has(group)),
     );

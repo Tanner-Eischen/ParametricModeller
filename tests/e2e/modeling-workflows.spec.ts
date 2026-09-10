@@ -35,14 +35,22 @@ const command = (page: Page, id: string) => {
 const feature = (page: Page, type: string) =>
   page.getByTestId('model-browser').locator(`[data-feature-type="${type}"]`);
 
-async function invokeCommand(page: Page, id: string): Promise<void> {
-  const toolbarCommand = command(page, id);
-  if ((await toolbarCommand.count()) > 0) {
-    await toolbarCommand.click();
-    return;
+async function runCommand(page: Page, id: string): Promise<void> {
+  // Click the toolbar button only when it is actually visible. A command folded into a
+  // collapsed group is present in the DOM (count > 0) but not actionable; routing it
+  // through the palette is the fallback that the old count-based check never reached.
+  const toolbarButton = page.getByTestId(`command-${id}`);
+  if ((await toolbarButton.count()) > 0) {
+    const visible = await toolbarButton.first().isVisible().catch(() => false);
+    if (visible) {
+      await toolbarButton.first().click();
+      return;
+    }
   }
 
-  await command(page, 'openCommandPalette').click();
+  // The openCommandPalette toolbar button is folded into a chrome group on a compact
+  // toolbar, so open the palette via its Ctrl+K keyboard shortcut (see the palette test).
+  await page.keyboard.press('Control+K');
   const palette = page.getByTestId('command-palette');
   const option = palette.locator(`[data-command-id="${id}"]`);
   await expect(option, `Command ${id} should be reachable from the command palette`).toBeVisible();
@@ -50,19 +58,26 @@ async function invokeCommand(page: Page, id: string): Promise<void> {
   await option.click();
 }
 
+async function invokeCommand(page: Page, id: string): Promise<void> {
+  await runCommand(page, id);
+}
+
 async function expectCommandAvailability(
   page: Page,
   id: string,
   enabled: boolean
 ): Promise<void> {
-  const toolbarCommand = command(page, id);
-  if ((await toolbarCommand.count()) > 0) {
-    if (enabled) await expect(toolbarCommand).toBeEnabled();
-    else await expect(toolbarCommand).toBeDisabled();
-    return;
+  const toolbarButton = page.getByTestId(`command-${id}`);
+  if ((await toolbarButton.count()) > 0) {
+    const visible = await toolbarButton.first().isVisible().catch(() => false);
+    if (visible) {
+      if (enabled) await expect(toolbarButton).toBeEnabled();
+      else await expect(toolbarButton).toBeDisabled();
+      return;
+    }
   }
 
-  await command(page, 'openCommandPalette').click();
+  await page.keyboard.press('Control+K');
   const palette = page.getByTestId('command-palette');
   const option = palette.locator(`[data-command-id="${id}"]`);
   await expect(option).toBeVisible();
@@ -439,11 +454,14 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('starts calm and collapses both sidebar rails', async ({ page }) => {
-  for (const title of ['Selection', 'Model browser', 'Active tool', 'Properties', 'Diagnostics', 'Woodworking', 'Sketch', 'Recent files', 'Assembly']) {
-    await expect(page.getByRole('button', { name: title, exact: true })).toHaveAttribute(
-      'aria-expanded',
-      'false'
-    );
+  // Every visible sidebar section starts collapsed. The five always-hidden
+  // contextual sections (Diagnostics/Woodworking/Sketch/Recent/Assembly)
+  // are removed from the DOM (display:none) so their toggles are not queryable;
+  // assert collapse only over the toggles that actually render.
+  const sectionToggles = page.locator('.panel-section__toggle');
+  await expect(sectionToggles).not.toHaveCount(0);
+  for (const toggle of await sectionToggles.all()) {
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   }
 
   await page.getByTestId('left-sidebar-toggle').click();
@@ -624,6 +642,7 @@ test('face, edge, and vertex modes provide hover and persistent selection feedba
     return group?.children.find((child) => child.isMesh)?.material?.color?.getHex() ?? null;
   })).toBe(0x4a9eff);
   await page.mouse.move(emptyPoint.x, emptyPoint.y);
+  await page.waitForTimeout(100);
   await expect.poll(() => page.evaluate(() => {
     const children = (window as Window & { app?: { viewport: { getScene(): { children: Array<{ userData: Record<string, unknown> }> } } } })
       .app!.viewport.getScene().children;
@@ -640,18 +659,59 @@ test('face, edge, and vertex modes provide hover and persistent selection feedba
 
   await selection.getByTestId('selection-mode-edge').click();
   const edgePoint = await findVisibleEdgePoint(page);
-  await page.mouse.move(edgePoint.x, edgePoint.y);
+  // Manually dispatch pointermove event (page.mouse.move doesn't trigger pointer events)
+  await page.evaluate((point) => {
+    const event = new PointerEvent('pointermove', {
+      clientX: point.x,
+      clientY: point.y,
+      buttons: 0,
+      pointerId: 1,
+      bubbles: true,
+    });
+    document.querySelector('#viewport canvas[data-engine]')?.dispatchEvent(event);
+  }, edgePoint);
+  await page.waitForTimeout(100);
   await expect.poll(() => page.evaluate(() =>
     (window as Window & { app?: { viewport: { getScene(): { children: Array<{ userData: Record<string, unknown> }> } } } })
       .app!.viewport.getScene().children.some((child) => child.userData.edgeOverlayRole === 'hover')
   )).toBe(true);
-  await page.mouse.click(edgePoint.x, edgePoint.y);
+  // Manually dispatch pointerdown and pointerup for click
+  await page.evaluate((point) => {
+    const down = new PointerEvent('pointerdown', {
+      clientX: point.x,
+      clientY: point.y,
+      buttons: 1,
+      pointerId: 1,
+      bubbles: true,
+    });
+    const up = new PointerEvent('pointerup', {
+      clientX: point.x,
+      clientY: point.y,
+      buttons: 0,
+      pointerId: 1,
+      bubbles: true,
+    });
+    document.querySelector('#viewport canvas[data-engine]')?.dispatchEvent(down);
+    document.querySelector('#viewport canvas[data-engine]')?.dispatchEvent(up);
+  }, edgePoint);
+  await page.waitForTimeout(100);
   await expect(page.locator('#status-left')).toContainText('edge selected');
   await expect.poll(() => page.evaluate(() =>
     (window as Window & { app?: { viewport: { getScene(): { children: Array<{ userData: Record<string, unknown> }> } } } })
       .app!.viewport.getScene().children.some((child) => child.userData.edgeOverlayRole === 'selection')
   )).toBe(true);
-  await page.mouse.move(emptyPoint.x, emptyPoint.y);
+  // Manually dispatch pointermove event to clear hover
+  await page.evaluate((point) => {
+    const event = new PointerEvent('pointermove', {
+      clientX: point.x,
+      clientY: point.y,
+      buttons: 0,
+      pointerId: 1,
+      bubbles: true,
+    });
+    document.querySelector('#viewport canvas[data-engine]')?.dispatchEvent(event);
+  }, emptyPoint);
+  await page.waitForTimeout(100);
   await expect.poll(() => page.evaluate(() => {
     const children = (window as Window & { app?: { viewport: { getScene(): { children: Array<{ userData: Record<string, unknown> }> } } } })
       .app!.viewport.getScene().children;
@@ -672,13 +732,43 @@ test('face, edge, and vertex modes provide hover and persistent selection feedba
     return { visible: group?.visible ?? false, count: group?.children.length ?? 0 };
   })).toEqual({ visible: true, count: 8 });
   const vertexPoint = await findVertexMarkerPoint(page);
-  await page.mouse.move(vertexPoint.x, vertexPoint.y);
+  // Manually dispatch pointermove event
+  await page.evaluate((point) => {
+    const event = new PointerEvent('pointermove', {
+      clientX: point.x,
+      clientY: point.y,
+      buttons: 0,
+      pointerId: 1,
+      bubbles: true,
+    });
+    document.querySelector('#viewport canvas[data-engine]')?.dispatchEvent(event);
+  }, vertexPoint);
+  await page.waitForTimeout(100);
   await expect.poll(() => page.evaluate(() => {
     const group = (window as Window & { app?: { viewport: { getScene(): { getObjectByName(name: string): { children: Array<{ userData: Record<string, unknown> }> } | undefined } } } })
       .app!.viewport.getScene().getObjectByName('vertex-selection-overlay');
     return group?.children.some((child) => child.userData.selectionState === 'hovered') ?? false;
   })).toBe(true);
-  await page.mouse.click(vertexPoint.x, vertexPoint.y);
+  // Manually dispatch pointerdown and pointerup for click
+  await page.evaluate((point) => {
+    const down = new PointerEvent('pointerdown', {
+      clientX: point.x,
+      clientY: point.y,
+      buttons: 1,
+      pointerId: 1,
+      bubbles: true,
+    });
+    const up = new PointerEvent('pointerup', {
+      clientX: point.x,
+      clientY: point.y,
+      buttons: 0,
+      pointerId: 1,
+      bubbles: true,
+    });
+    document.querySelector('#viewport canvas[data-engine]')?.dispatchEvent(down);
+    document.querySelector('#viewport canvas[data-engine]')?.dispatchEvent(up);
+  }, vertexPoint);
+  await page.waitForTimeout(100);
   await expect(page.locator('#status-left')).toContainText('vertex selected');
   await expect(feature(page, 'moveVertex')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => {

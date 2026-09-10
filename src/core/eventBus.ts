@@ -60,6 +60,7 @@ interface EventMap {
   'feature:update': { featureId: string; parameters: Record<string, unknown> };
   'feature:rebuild': { featureId: string; success: boolean };
   'feature:diagnostics': { diagnostics: DiagnosticLike[] };
+  'rebuild:start': { totalFeatures: number };
   'rebuild:complete': { diagnostics: DiagnosticLike[] };
   'rebuild:failed': { diagnostics: DiagnosticLike[] };
   'ui:status': { message: string; announce?: boolean };

@@ -86,6 +86,9 @@ export * from './cut';
 // Pattern features (Milestone 05)
 export * from './pattern';
 
+// Fillet feature
+export * from './fillet';
+
 // Assembly module (Milestone 06)
 export * from '../assembly';
 
@@ -109,3 +112,6 @@ export * from './joints';
 
 // Independent baked-body snapshot (first-class body with no source dependency)
 export * from './bake';
+
+// Guarded direct resize using exact world-axis dimensions
+export * from './resize';

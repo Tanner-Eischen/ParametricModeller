@@ -20,11 +20,14 @@ export type AppCommandId =
   | 'addSketch'
   | 'addExtrude'
   | 'addExtrudeCut'
+  | 'addHole'
+  | 'addFillet'
   | 'addWoodJoint'
   | 'addMiterCut'
   | 'addFaceSketch'
   | 'enterPushPull'
   | 'addLinearPattern'
+  | 'addCircularPattern'
   | 'addMirror'
   | 'addMove'
   | 'addDuplicate'
@@ -48,6 +51,9 @@ export type AppCommandId =
   | 'measureSelection'
   | 'exportCutList'
   | 'exportDrawing'
+  | 'exportSTL'
+  | 'exportSTEP'
+  | 'exportMF3'
   | 'openCommandPalette'
   | 'toggleHelp';
  
@@ -93,10 +99,21 @@ export const TOOLBAR_GROUP_ORDER: CommandGroup[] = [
   'Help',
 ];
 
-/** Groups expanded on the toolbar by default. Empty by design: the toolbar
- *  starts as a compact row of category chips and each category reveals its
- *  tools on click — progressive disclosure. Nothing is expanded by default. */
-export const DEFAULT_EXPANDED_TOOLBAR_GROUPS: ReadonlySet<CommandGroup> = new Set();
+/** Groups expanded on the toolbar by default. On a fresh first run the modeling
+ *  groups surface their tools directly (a compact icon row) while the pure-chrome
+ *  groups (View/File/Output) fold into category chips — progressive disclosure
+ *  that still keeps the primary work tools one click away. The Help group also
+ *  expands so the Ctrl+K command palette and Help buttons are reachable by mouse
+ *  on first run (the discovery surfaces a new user needs). The whole toolbar
+ *  stays compact (collapsed/quiet); only group expansion differs. */
+export const DEFAULT_EXPANDED_TOOLBAR_GROUPS: ReadonlySet<CommandGroup> = new Set([
+  'Create',
+  'Transform',
+  'Combine',
+  'Edit',
+  'Assembly',
+  'Help',
+]);
  
 export const SHORTCUT_CATEGORY_ORDER: ShortcutCategory[] = [
   'Features',
@@ -190,6 +207,24 @@ export const COMMAND_DEFINITIONS: AppCommandDefinition[] = [
     shortcutCategory: 'Features',
   },
   {
+    id: 'addHole',
+    icon: '○',
+    label: 'Hole',
+    description: 'Create a drilled, counterbored, or countersunk hole',
+    toolbarGroup: 'Create',
+    shortcutCategory: 'Features',
+    placement: 'primary',
+    keywords: ['drill', 'counterbore', 'countersink', 'fastener'],
+  },
+  {
+    id: 'addFillet',
+    icon: '⌘',
+    label: 'Fillet',
+    description: 'Add a constant-radius fillet to a selected body edge',
+    toolbarGroup: 'Transform',
+    shortcutCategory: 'Features',
+  },
+  {
     id: 'addWoodJoint',
     icon: 'JT',
     label: 'Joint',
@@ -229,9 +264,17 @@ export const COMMAND_DEFINITIONS: AppCommandDefinition[] = [
   {
     id: 'addLinearPattern',
     icon: 'â‰¡',
-    label: 'Pattern',
+    label: 'Linear Pattern',
     description: 'Select one body, then create a linear pattern',
     shortcut: 'L',
+    toolbarGroup: 'Transform',
+    shortcutCategory: 'Features',
+  },
+  {
+    id: 'addCircularPattern',
+    icon: '◯',
+    label: 'Circular Pattern',
+    description: 'Select one body, then create a circular pattern around an axis',
     toolbarGroup: 'Transform',
     shortcutCategory: 'Features',
   },
@@ -436,6 +479,27 @@ export const COMMAND_DEFINITIONS: AppCommandDefinition[] = [
     icon: '2D',
     label: 'Drawing',
     description: 'Export exact top, front, and right orthographic SVG views',
+    toolbarGroup: 'Output',
+  },
+  {
+    id: 'exportSTL',
+    icon: 'STL',
+    label: 'STL',
+    description: 'Export model as STL file for 3D printing',
+    toolbarGroup: 'Output',
+  },
+  {
+    id: 'exportSTEP',
+    icon: 'STEP',
+    label: 'STEP',
+    description: 'Export model as STEP file for CAD interchange',
+    toolbarGroup: 'Output',
+  },
+  {
+    id: 'exportMF3',
+    icon: '3MF',
+    label: '3MF',
+    description: 'Export model as 3MF file for 3D printing',
     toolbarGroup: 'Output',
   },
   {

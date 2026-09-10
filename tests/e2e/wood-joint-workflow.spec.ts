@@ -13,6 +13,11 @@ async function openCleanModeler(page: Page): Promise<void> {
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.sessionStorage.clear();
+    // E2E drives tools via toolbar button clicks, so the toolbar must be
+    // expanded with all groups unfolded (the app defaults to a compact, folded
+    // toolbar where individual command buttons are not visible/clickable).
+    window.localStorage.setItem('modelling.commandToolbarCollapsed', 'expanded');
+    window.localStorage.setItem('modelling.commandToolbarCollapsedGroups', '[]');
   });
   await page.goto('/');
   await expect(page.locator('#viewport canvas[data-engine]')).toBeVisible();

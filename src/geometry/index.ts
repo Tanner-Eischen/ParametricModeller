@@ -176,6 +176,7 @@ export {
   translateBody,
   mirrorBody,
   transformVertexPositions,
+  resizeBodyToDimensions,
   combineBodies,
 } from './TransformUtils';
 

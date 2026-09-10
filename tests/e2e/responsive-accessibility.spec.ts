@@ -62,9 +62,16 @@ test('first run is quiet, non-modal, and collapsed by default', async ({ page })
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   }
 
-  const primaryCommands = page.locator('.command-toolbar__button');
-  await expect(primaryCommands).toHaveCount(8);
+  // First run surfaces the modeling groups' tools as a compact icon row while folding the
+  // chrome groups (View/File/Output/Help) into category chips. The whole toolbar stays
+  // collapsed/quiet; a primary work tool is visible, a chrome tool is hidden behind its chip.
+  const toolbar = page.locator('.command-toolbar');
+  await expect(toolbar).toHaveAttribute('data-collapsed', 'true');
   await expect(page.getByRole('toolbar', { name: 'Modeling commands' })).toBeAttached();
+  await expect(page.getByTestId('command-addBox')).toBeVisible();
+  await expect(page.getByTestId('command-fitView')).toBeHidden();
+  await expect(page.getByTestId('command-toolbar-group-Create')).toHaveAttribute('data-collapsed', 'false');
+  await expect(page.getByTestId('command-toolbar-group-View')).toHaveAttribute('data-collapsed', 'true');
 
   const visibleText = await page.locator('body').innerText();
   expect(visibleText).not.toMatch(

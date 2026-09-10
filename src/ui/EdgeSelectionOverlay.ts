@@ -31,6 +31,9 @@ export class EdgeSelectionOverlay {
   }
 
   setHoveredEdge(body: Body, edgeId: string): void {
+    // Diagnostic counter for e2e tests
+    (this as unknown as { __edgeHoverCalls?: number }).__edgeHoverCalls =
+      ((this as unknown as { __edgeHoverCalls?: number }).__edgeHoverCalls ?? 0) + 1;
     if (this.matches(this.hovered, body.id, edgeId)) return;
     this.clearHover();
     this.hovered = { bodyId: body.id, edgeId };

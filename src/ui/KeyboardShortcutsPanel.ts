@@ -88,6 +88,8 @@ export interface KeyboardShortcutsPanelOptions {
   container?: HTMLElement;
   /** Invoked when panel visibility changes */
   onVisibilityChange?: (visible: boolean) => void;
+  /** Invoked when Quick Start link is clicked */
+  onShowQuickStart?: () => void;
 }
 
 /**
@@ -98,12 +100,14 @@ export class KeyboardShortcutsPanel {
   private overlay: HTMLElement | null = null;
   private isVisible = false;
   private onVisibilityChange: ((visible: boolean) => void) | undefined;
+  private onShowQuickStart: (() => void) | undefined;
 
   constructor(options?: KeyboardShortcutsPanelOptions) {
     if (options?.container) {
       this.attachTo(options.container);
     }
     this.onVisibilityChange = options?.onVisibilityChange;
+    this.onShowQuickStart = options?.onShowQuickStart;
     log.debug('KeyboardShortcutsPanel created');
   }
 
@@ -230,6 +234,30 @@ export class KeyboardShortcutsPanel {
 
     mouseSection.appendChild(mouseTable);
     panel.appendChild(mouseSection);
+
+    // Quick start link section
+    const quickSection = document.createElement('section');
+    quickSection.className = 'help-panel-section';
+
+    const quickHeader = document.createElement('div');
+    quickHeader.className = 'help-panel-section-title';
+    quickHeader.textContent = 'Quick start';
+    quickSection.appendChild(quickHeader);
+
+    const quickLink = document.createElement('a');
+    quickLink.href = '#';
+    quickLink.textContent = 'Show Quick Start overlay again';
+    quickLink.style.display = 'block';
+    quickLink.style.marginTop = '8px';
+    quickLink.style.color = '#5da9ff';
+    quickLink.style.textDecoration = 'underline';
+    quickLink.addEventListener('click', (event) => {
+      event.preventDefault();
+      this.hide();
+      this.onShowQuickStart?.();
+    });
+    quickSection.appendChild(quickLink);
+    panel.appendChild(quickSection);
 
     this.overlay.appendChild(panel);
     this.container.appendChild(this.overlay);

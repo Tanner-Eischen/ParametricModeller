@@ -255,6 +255,8 @@ export class FeatureTreePanel {
       moveVertex: 'MV',
       duplicate: 'DP',
       moveCopy: 'MC',
+      bakeBody: 'IB',
+      resizeBody: 'RS',
       rotateBody: 'RT',
       joinBodies: 'CB',
       bodyBoolean: 'BL',

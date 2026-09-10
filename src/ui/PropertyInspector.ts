@@ -19,6 +19,8 @@ import type {
   MiterCutParams,
   WoodJointParams,
   TransformBodiesParams,
+  ResizeBodyParams,
+  FilletParams,
 } from '../features';
 import type { MoveVertexParams } from '../features/vertex';
 import {
@@ -217,7 +219,7 @@ export class PropertyInspector {
 
     const description = document.createElement('p');
     description.textContent =
-      'Enter width, depth, and height, then create your first prism. Keep width and depth equal for a square prism.';
+      'Enter width, height, and depth, then create your first prism. Keep width and height equal for a square prism.';
     description.style.cssText = 'margin: 0; font-size: 12px; line-height: 1.5; color: #b7b7b7;';
     card.appendChild(description);
 
@@ -227,12 +229,12 @@ export class PropertyInspector {
       })
     );
     card.appendChild(
-      this.createNumberInput('Depth (Y)', this.quickBoxDraft.depth, (value) => {
+      this.createNumberInput('Height (Y)', this.quickBoxDraft.depth, (value) => {
         this.quickBoxDraft = { ...this.quickBoxDraft, depth: value };
       })
     );
     card.appendChild(
-      this.createNumberInput('Height (Z)', this.quickBoxDraft.height, (value) => {
+      this.createNumberInput('Depth (Z)', this.quickBoxDraft.height, (value) => {
         this.quickBoxDraft = { ...this.quickBoxDraft, height: value };
       })
     );
@@ -262,7 +264,7 @@ export class PropertyInspector {
         this.quickBoxDraft.height <= 0
       ) {
         eventBus.emit('ui:status', {
-          message: 'Width, depth, and height must be greater than 0',
+          message: 'Width, height, and depth must be greater than 0',
         });
         return;
       }
@@ -319,6 +321,10 @@ export class PropertyInspector {
       return this.renderBoxParameters(container);
     }
 
+    if (this.currentFeature.type === 'resizeBody') {
+      return this.renderResizeBodyParameters(container);
+    }
+
     if (this.currentFeature.type === 'sketch') {
       return this.renderSketchParameters(container);
     }
@@ -341,6 +347,10 @@ export class PropertyInspector {
 
     if (this.currentFeature.type === 'mirror') {
       return this.renderMirrorParameters(container);
+    }
+
+    if (this.currentFeature.type === 'fillet') {
+      return this.renderFilletParameters(container);
     }
 
     if (this.currentFeature.type === 'createComponent') {
@@ -399,16 +409,16 @@ export class PropertyInspector {
       })
     );
 
-    // Depth
+    // Legacy storage calls world Y "depth"; the Y-up UI presents it as height.
     container.appendChild(
-      this.createNumberInput('Depth (Y)', params.depth, (val) => {
+      this.createNumberInput('Height (Y)', params.depth, (val) => {
         this.updateParameter('depth', val);
       })
     );
 
-    // Height
+    // Legacy storage calls world Z "height"; the Y-up UI presents it as depth.
     container.appendChild(
-      this.createNumberInput('Height (Z)', params.height, (val) => {
+      this.createNumberInput('Depth (Z)', params.height, (val) => {
         this.updateParameter('height', val);
       })
     );
@@ -443,6 +453,22 @@ export class PropertyInspector {
       )
     );
 
+    return container;
+  }
+
+  /** Render the dedicated, dimensions-only direct resize feature. */
+  private renderResizeBodyParameters(container: HTMLElement): HTMLElement {
+    if (!this.currentFeature) return container;
+    const params = this.currentFeature.parameters as unknown as ResizeBodyParams;
+    container.appendChild(this.createNumberInput('Width (X)', params.width, (value) => {
+      this.updateParameter('width', value);
+    }));
+    container.appendChild(this.createNumberInput('Height (Y)', params.height, (value) => {
+      this.updateParameter('height', value);
+    }));
+    container.appendChild(this.createNumberInput('Depth (Z)', params.depth, (value) => {
+      this.updateParameter('depth', value);
+    }));
     return container;
   }
 
@@ -1082,6 +1108,39 @@ export class PropertyInspector {
     }
 
     container.appendChild(axisContainer);
+
+    return container;
+  }
+
+  /**
+   * Render fillet-specific parameters.
+   */
+  private renderFilletParameters(container: HTMLElement): HTMLElement {
+    if (!this.currentFeature) return container;
+
+    const params = this.currentFeature.parameters as unknown as FilletParams;
+
+    // Source feature reference (read-only)
+    container.appendChild(this.createSectionLabel('Source Feature'));
+    const sourceInfo = document.createElement('div');
+    sourceInfo.style.cssText = 'font-size: 12px; color: #aaa; margin-bottom: 8px;';
+    sourceInfo.textContent = `Feature ID: ${params.sourceFeatureId ?? 'none'}`;
+    container.appendChild(sourceInfo);
+
+    // Radius
+    container.appendChild(
+      this.createNumberInput('Radius', params.radius ?? 5, (val) => {
+        this.updateParameter('radius', Math.max(0.01, val));
+      })
+    );
+
+    // Edge selection note
+    container.appendChild(this.createSectionLabel('Edge Selection'));
+    const edgeInfo = document.createElement('div');
+    edgeInfo.style.cssText = 'font-size: 12px; color: #888; margin-bottom: 8px;';
+    edgeInfo.textContent = params.edgeIds?.length ? `Select edges in the viewport. ${params.edgeIds.length} edge(s) selected.`
+      : 'Select edges in the viewport to fillet.';
+    container.appendChild(edgeInfo);
 
     return container;
   }

@@ -278,10 +278,15 @@ export class Picking {
   ): SubObjectPickResult | null {
     let closestResult: SubObjectPickResult | null = null;
     let closestDistance = tolerance;
+    let bestSeen = Infinity;
+    let bodiesCount = 0;
+    let edgesChecked = 0;
 
     // Project all edges to screen space and find closest within tolerance
     for (const [bodyId, { body, featureId }] of bodies) {
+      bodiesCount++;
       for (const [edgeId, edge] of body.edges) {
+        edgesChecked++;
         const v1 = body.vertices.get(edge.vertexIds[0]);
         const v2 = body.vertices.get(edge.vertexIds[1]);
 
@@ -306,6 +311,8 @@ export class Picking {
           s2x, s2y
         );
 
+        if (screenDistance < bestSeen) bestSeen = screenDistance;
+
         // Check if within tolerance and closer than previous best
         if (screenDistance < closestDistance) {
           closestDistance = screenDistance;
@@ -327,6 +334,10 @@ export class Picking {
       }
     }
 
+    if (bodiesCount > 0 && edgesChecked > 0) {
+      // eslint-disable-next-line no-console
+      console.log('[pickEdge diag]', { bodiesCount, edgesChecked, bestSeen, tolerance, screenX, screenY, containerWidth, containerHeight });
+    }
     return closestResult;
   }
 

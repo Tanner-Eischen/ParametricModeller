@@ -878,13 +878,14 @@ html, body {
 }
 
 .command-toolbar[data-collapsed='true'] .command-toolbar__group-header {
-  padding: 3px 5px;
+  padding: 8px 5px;
+  min-height: 44px;
 }
 
 .command-toolbar[data-collapsed='true'] .command-toolbar__button {
-  min-width: 36px;
-  min-height: 36px;
-  padding: 4px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px;
   gap: 0;
 }
 
@@ -1956,8 +1957,13 @@ html, body {
   .sidebar-collapse-control,
   .panel-section__toggle,
   .command-toolbar__button,
-  .command-toolbar__toggle {
+  .command-toolbar__toggle,
+  .context-task-panel__control,
+  .context-task-panel button,
+  .viewport-selection-context__mode,
+  .viewport-selection-context__action {
     min-height: 44px;
+    min-width: 44px;
   }
 
   .command-toolbar__groups {
@@ -1979,13 +1985,12 @@ html, body {
   }
 
   .toolbar-button,
-  .command-toolbar__button {
-    min-width: 44px;
-  }
-
-  .command-toolbar[data-collapsed='true'] .command-toolbar__button {
+  .command-toolbar__button,
+  .command-toolbar__group-header {
     min-width: 44px;
     min-height: 44px;
+    flex-shrink: 0;
+    padding: 8px;
   }
 
   .help-panel-header {
@@ -1999,4 +2004,65 @@ html, body {
   .help-panel-keycell {
     width: 110px;
   }
+}
+
+/* Viewport context menu */
+.viewport-context-menu {
+  position: absolute;
+  z-index: 9999;
+  min-width: 180px;
+  background: rgba(12, 18, 27, 0.96);
+  border: 1px solid rgba(143, 207, 255, 0.34);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  padding: 6px;
+  pointer-events: auto;
+}
+
+.viewport-context-menu__header {
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid rgba(143, 207, 255, 0.2);
+  font-size: 11px;
+  font-weight: 600;
+  color: #c8d7e9;
+}
+
+.viewport-context-menu__item {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 2px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #c8d7e9;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.viewport-context-menu__item:hover:not(:disabled) {
+  background: rgba(29, 128, 190, 0.4);
+  color: #fff;
+}
+
+.viewport-context-menu__item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.viewport-context-menu__separator {
+  border: none;
+  border-top: 1px solid rgba(143, 207, 255, 0.2);
+  margin: 6px 0;
+}
+
+.viewport-context-menu__empty {
+  padding: 12px;
+  font-size: 12px;
+  color: #878797;
+  text-align: center;
 }

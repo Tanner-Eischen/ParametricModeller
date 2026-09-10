@@ -45,6 +45,19 @@ export class StatusBar {
         this.setCenterMessage(`${selectedIds.size} object${selectedIds.size > 1 ? 's' : ''} selected`);
       }
     });
+
+    eventBus.on('rebuild:start', ({ totalFeatures }) => {
+      if (totalFeatures > 5) {
+        this.leftSection.textContent = `Rebuilding...`;
+      }
+    });
+
+    eventBus.on('rebuild:complete', () => {
+      // Clear progress indicator after rebuild completes
+      if (this.leftSection.textContent?.includes('Rebuilding')) {
+        this.leftSection.textContent = '';
+      }
+    });
   }
 
   setLeftMessage(message: string): void {
@@ -71,5 +84,13 @@ export class StatusBar {
 
   setUnits(units: 'inch' | 'mm'): void {
     this.setRightMessage(`Units: ${units === 'inch' ? 'Inches' : 'Millimeters'}`);
+  }
+
+  setRebuildProgress(label: string, current: number, total: number): void {
+    this.leftSection.textContent = `${label}... ${current}/${total}`;
+  }
+
+  clearRebuildProgress(): void {
+    this.leftSection.textContent = '';
   }
 }

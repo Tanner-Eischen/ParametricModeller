@@ -478,8 +478,8 @@ describe('PropertyInspector sketch parameters', () => {
 
     const width = inputFor('Width (X)');
     enter(width, '3/4');
-    enter(inputFor('Depth (Y)'), '25 mm');
-    enter(inputFor('Height (Z)'), '+1/8');
+    enter(inputFor('Height (Y)'), '25 mm');
+    enter(inputFor('Depth (Z)'), '+1/8');
     enter(inputFor('X'), '1 + 2 * 3');
     enter(width, 'not a distance');
 
@@ -502,6 +502,35 @@ describe('PropertyInspector sketch parameters', () => {
         origin: [7, 0, 0],
       },
     });
+  });
+
+  it('edits a resize feature with Y as height and Z as depth', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    inspector = new PropertyInspector({ container });
+    const feature = createFeatureRecord('resizeBody', 'Resize copy', {
+      bodyRef: { featureId: 'copy-feature', bodyId: 'copy-body' },
+      width: 4,
+      height: 2,
+      depth: 8,
+    });
+    const onUpdate = vi.fn();
+    eventBus.on('feature:update', onUpdate);
+    inspector.setFeature(feature);
+
+    const inputFor = (label: string): HTMLInputElement =>
+      container!.querySelector(`input[data-numeric-label="${label}"]`) as HTMLInputElement;
+    inputFor('Height (Y)').value = '3';
+    inputFor('Height (Y)').dispatchEvent(new Event('input', { bubbles: true }));
+    inputFor('Depth (Z)').value = '9';
+    inputFor('Depth (Z)').dispatchEvent(new Event('input', { bubbles: true }));
+    inspector.applyPendingChanges();
+
+    expect(onUpdate).toHaveBeenCalledWith({
+      featureId: feature.id,
+      parameters: expect.objectContaining({ width: 4, height: 3, depth: 9 }),
+    });
+    expect(container.textContent).not.toContain('copy-body');
   });
 
   it('edits free placement translation and rotation without exposing body IDs', () => {

@@ -237,6 +237,13 @@ export {
   type ViewportSelectionAction,
 } from './ViewportSelectionContext';
 export {
+  ViewportContextMenu,
+  createViewportContextMenu,
+  type ViewportContextMenuOptions,
+  type ViewportContextMenuState,
+  type ContextMenuItem,
+} from './ViewportContextMenu';
+export {
   CutListPreviewPanel,
   buildCutListPreviewModel,
   type CutListAllowanceDimension,
@@ -266,3 +273,15 @@ export {
   type WoodJointEditorPresenterOptions,
   type WoodJointEditorUpdateResult,
 } from './WoodJointEditor';
+export {
+  createTutorialController,
+  getTutorialSteps,
+  getCurrentStep,
+  isTutorialComplete,
+  getTutorialProgress,
+  createTutorialState,
+  markStepCompleted,
+  type TutorialStep,
+  type TutorialState,
+  type TutorialOptions,
+} from './Tutorial';

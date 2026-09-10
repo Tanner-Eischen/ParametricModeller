@@ -23,13 +23,20 @@ function transformPoint(
   return [v.x, v.y, v.z];
 }
 
-function transformDirection(
-  direction: [number, number, number],
-  matrix: THREE.Matrix4
-): [number, number, number] {
-  const v = new THREE.Vector3(...direction);
-  v.transformDirection(matrix);
-  return [v.x, v.y, v.z];
+function transformPlane(plane: Plane, matrix: THREE.Matrix4): Plane {
+  const normalMatrix = new THREE.Matrix3().getNormalMatrix(matrix);
+  const normal = new THREE.Vector3(...plane.normal).applyMatrix3(normalMatrix).normalize();
+  const transformedU = new THREE.Vector3(...plane.uAxis).transformDirection(matrix);
+  const uAxis = transformedU
+    .addScaledVector(normal, -transformedU.dot(normal))
+    .normalize();
+  const vAxis = new THREE.Vector3().crossVectors(normal, uAxis).normalize();
+  return {
+    origin: transformPoint(plane.origin, matrix),
+    normal: normal.toArray() as [number, number, number],
+    uAxis: uAxis.toArray() as [number, number, number],
+    vAxis: vAxis.toArray() as [number, number, number],
+  };
 }
 
 function copyBodyTopology(
@@ -165,13 +172,44 @@ export function transformVertexPositions(
     body,
     newId ?? `${body.id}_transformed`,
     (position) => transformPoint(position, matrix),
-    (plane) => ({
-      origin: transformPoint(plane.origin, matrix),
-      normal: transformDirection(plane.normal, matrix),
-      uAxis: transformDirection(plane.uAxis, matrix),
-      vAxis: transformDirection(plane.vAxis, matrix),
-    })
+    (plane) => transformPlane(plane, matrix)
   );
+}
+
+/**
+ * Resize a solid to exact world-axis dimensions while keeping its minimum
+ * bounding-box corner fixed. Positive non-uniform scaling preserves planar
+ * faces and sharp edges.
+ */
+export function resizeBodyToDimensions(
+  body: Body,
+  dimensions: [number, number, number],
+  newId?: string
+): Body {
+  const minimum: [number, number, number] = [Infinity, Infinity, Infinity];
+  const maximum: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  for (const vertex of body.vertices.values()) {
+    for (let axis = 0; axis < 3; axis++) {
+      minimum[axis] = Math.min(minimum[axis]!, vertex.position[axis]!);
+      maximum[axis] = Math.max(maximum[axis]!, vertex.position[axis]!);
+    }
+  }
+  const current = maximum.map((value, axis) => value - minimum[axis]!) as [number, number, number];
+  if (current.some((value) => !Number.isFinite(value) || value <= JOIN_TOLERANCE)) {
+    throw new Error('Resize requires a solid with non-zero width, height, and depth.');
+  }
+  if (dimensions.some((value) => !Number.isFinite(value) || value <= JOIN_TOLERANCE)) {
+    throw new Error('Resize dimensions must be finite and greater than zero.');
+  }
+
+  const scale = dimensions.map((value, axis) => value / current[axis]!) as [number, number, number];
+  const matrix = new THREE.Matrix4().makeScale(...scale);
+  matrix.setPosition(
+    minimum[0] * (1 - scale[0]),
+    minimum[1] * (1 - scale[1]),
+    minimum[2] * (1 - scale[2])
+  );
+  return transformVertexPositions(body, matrix, newId ?? body.id);
 }
 
 /**

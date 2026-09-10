@@ -46,6 +46,7 @@ import {
   MirrorPreviewManipulator,
   ViewCube,
   ViewportSelectionContext,
+  ViewportContextMenu,
   ModelBrowserPanel,
   CommandPalette,
   ContextTaskPanel,
@@ -82,6 +83,7 @@ import {
   type MatePreview,
   type CutListPreviewModel,
   type ViewportSelectionContextState,
+  type ContextMenuItem,
   type WoodworkingAxis,
   type WoodworkingMetadataDraft,
   defaultSnapSettings,
@@ -192,8 +194,19 @@ import {
   type NormalizedExtrudeCutParams,
 } from './features/cut';
 import { MITER_CUT_FEATURE_TYPE } from './features/miter';
-import { LINEAR_PATTERN_FEATURE_TYPE, MIRROR_FEATURE_TYPE, DUPLICATE_FEATURE_TYPE, rebuildDuplicate } from './features/pattern';
+import {
+  LINEAR_PATTERN_FEATURE_TYPE,
+  MIRROR_FEATURE_TYPE,
+  DUPLICATE_FEATURE_TYPE,
+  CIRCULAR_PATTERN_FEATURE_TYPE,
+  rebuildDuplicate,
+  rebuildCircularPattern,
+  createCircularPatternFeature,
+  type CircularPatternParams,
+} from './features/pattern';
 import { MOVE_VERTEX_FEATURE_TYPE } from './features/vertex';
+import { HOLE_FEATURE_TYPE, rebuildHole, createHoleFeature, type HoleParams } from './features/hole';
+import { FILLET_FEATURE_TYPE, rebuildFillet, createFilletFeature, type FilletParams } from './features/fillet';
 import { ROTATE_BODY_FEATURE_TYPE, JOIN_BODIES_FEATURE_TYPE } from './features/transform';
 import { PanelChrome } from './app/PanelChrome';
 import { GizmoManager } from './app/GizmoManager';
@@ -459,6 +472,7 @@ export class App {
   private commandToolbar: CommandToolbar;
   private viewCube: ViewCube;
   private viewportSelectionContext: ViewportSelectionContext;
+  private viewportContextMenu: ViewportContextMenu;
   private modelBrowser: ModelBrowserPanel;
   private commandPalette: CommandPalette;
   private contextTaskPanel: ContextTaskPanel;
@@ -554,6 +568,9 @@ export class App {
       onModeChange: (mode) => this.changeViewportSelectionMode(mode),
       onAction: (actionId) => this.handleViewportSelectionAction(actionId),
     });
+    this.viewportContextMenu = new ViewportContextMenu(this.layout.getViewport(), {
+      onAction: (actionId) => this.handleViewportContextMenuAction(actionId),
+    });
 
     // Initialize document
     this.documentManager = new DocumentManager();
@@ -579,10 +596,13 @@ export class App {
     );
     this.rebuildEngine.registerHandler(MITER_CUT_FEATURE_TYPE, rebuildMiterCut);
     this.rebuildEngine.registerHandler(LINEAR_PATTERN_FEATURE_TYPE, rebuildLinearPattern);
+    this.rebuildEngine.registerHandler(CIRCULAR_PATTERN_FEATURE_TYPE, rebuildCircularPattern);
     this.rebuildEngine.registerHandler(MIRROR_FEATURE_TYPE, rebuildMirror);
     this.rebuildEngine.registerHandler(DUPLICATE_FEATURE_TYPE, rebuildDuplicate);
     this.rebuildEngine.registerHandler(CREATE_COMPONENT_FEATURE_TYPE, rebuildCreateComponent);
     this.rebuildEngine.registerHandler(MOVE_VERTEX_FEATURE_TYPE, rebuildMoveVertex);
+    this.rebuildEngine.registerHandler(HOLE_FEATURE_TYPE, rebuildHole);
+    this.rebuildEngine.registerHandler(FILLET_FEATURE_TYPE, rebuildFillet);
     this.rebuildEngine.registerHandler(ROTATE_BODY_FEATURE_TYPE, rebuildRotateBody);
     this.rebuildEngine.registerHandler(JOIN_BODIES_FEATURE_TYPE, rebuildJoinBodies);
     this.rebuildEngine.registerHandler(BODY_BOOLEAN_FEATURE_TYPE, rebuildBodyBoolean);
@@ -681,6 +701,11 @@ export class App {
     this.keyboardShortcutsPanel = new KeyboardShortcutsPanel({
       container: document.body,
       onVisibilityChange: () => this.refreshUiChrome(),
+      onShowQuickStart: () => {
+        this.welcomeOverlay.resetDismissed();
+        this.welcomeOverlay.setVisible(true);
+        this.workspacePreferencesStore.update({ quickStartDismissed: false });
+      },
     });
 
     const commandActions = this.createCommandActions().map((action) => ({
@@ -1191,6 +1216,16 @@ export class App {
           this.getExplicitBodyTarget() === null,
       },
       {
+        id: 'addHole',
+        onTrigger: () => this.addHoleFeature(),
+        isDisabled: () => this.sketchModeController.isActive || this.toolSessions.activeSession !== null,
+      },
+      {
+        id: 'addFillet',
+        onTrigger: () => this.addFilletFeature(),
+        isDisabled: () => this.sketchModeController.isActive || this.toolSessions.activeSession !== null || this.rebuiltBodies.length === 0,
+      },
+      {
         id: 'addWoodJoint',
         onTrigger: () => this.startWoodJointTool(),
         isActive: () => this.toolSessions.activeSession?.kind === 'wood-joint',
@@ -1224,6 +1259,11 @@ export class App {
         id: 'addLinearPattern',
         onTrigger: () => this.addLinearPatternFeature(),
         isActive: () => this.toolSessions.activeSession?.kind === 'linear-pattern',
+        isDisabled: () => this.sketchModeController.isActive || this.getExplicitBodyTarget() === null,
+      },
+      {
+        id: 'addCircularPattern',
+        onTrigger: () => this.addCircularPatternFeature(),
         isDisabled: () => this.sketchModeController.isActive || this.getExplicitBodyTarget() === null,
       },
       {
@@ -1477,17 +1517,26 @@ export class App {
       {
         label: 'Board',
         description: 'Add a starter box feature',
-        onTrigger: () => this.commandDispatcher.dispatch('addBox', undefined),
+        onTrigger: () => {
+          this.welcomeOverlay.dismiss();
+          this.commandDispatcher.dispatch('addBox', undefined);
+        },
       },
       {
         label: 'Sketch',
         description: `Create a sketch on the ${this.preferredSketchPlane.toUpperCase()} plane`,
-        onTrigger: () => this.commandDispatcher.dispatch('addSketch', undefined),
+        onTrigger: () => {
+          this.welcomeOverlay.dismiss();
+          this.commandDispatcher.dispatch('addSketch', undefined);
+        },
       },
       {
         label: 'Open',
         description: 'Load a saved document',
-        onTrigger: () => this.commandDispatcher.dispatch('openDocument', undefined),
+        onTrigger: () => {
+          this.welcomeOverlay.dismiss();
+          this.commandDispatcher.dispatch('openDocument', undefined);
+        },
       },
     ];
   }
@@ -1535,10 +1584,9 @@ export class App {
     this.recentFilesPanel.setRecentFiles(this.recentFilesStore.list());
     // The Recent files section only appears when there's something to reopen.
     this.panelChrome.setHidden('Recent files', this.recentFilesStore.list().length === 0);
-    // The quick-start overlay is never shown by default — it adds to an already
-    // busy first-run screen. It is reachable on demand only (e.g. via Help).
+    // The quick-start overlay is shown on first run and hidden after dismissal.
     this.welcomeOverlay.refresh();
-    this.welcomeOverlay.setVisible(false);
+    this.welcomeOverlay.setVisible(!this.workspacePreferences.quickStartDismissed);
     this.refreshMoveVertexExperience();
     this.refreshRotateBodyExperience();
   }
@@ -1689,6 +1737,73 @@ export class App {
       this.addMoveVertexFeature();
     } else if (actionId === 'measure') {
       this.startMeasurementTool();
+    }
+  }
+
+  private handleViewportContextMenu(event: MouseEvent): void {
+    if (!this.selection.activeId) {
+      this.viewportContextMenu.open([], event.clientX, event.clientY);
+      return;
+    }
+
+    const bodyId = this.selection.activeId;
+    const feature = this.getFeatureByBodyId(bodyId);
+    if (!feature) {
+      this.viewportContextMenu.open([], event.clientX, event.clientY);
+      return;
+    }
+
+    const items: ContextMenuItem[] = [
+      { id: 'copy', label: 'Copy' },
+      { id: 'move', label: 'Move' },
+      { id: 'rotate', label: 'Rotate' },
+      { id: 'duplicate', label: 'Duplicate' },
+      { separator: true, id: '', label: '' },
+      { id: 'hide', label: 'Hide' },
+      { id: 'lock', label: 'Lock' },
+      { id: 'delete', label: 'Delete' },
+    ];
+
+    const selectionInfo = { kind: feature.type, name: feature.name };
+    this.viewportContextMenu.open(items, event.clientX, event.clientY, selectionInfo);
+  }
+
+  private handleViewportContextMenuAction(actionId: string): void {
+    if (!this.selection.activeId) return;
+
+    const bodyId = this.selection.activeId;
+    const feature = this.getFeatureByBodyId(bodyId);
+
+    if (actionId === 'copy') {
+      this.addDuplicateFeature();
+    } else if (actionId === 'move') {
+      this.addMoveBodyFeature();
+    } else if (actionId === 'rotate') {
+      this.addRotateBodyFeature();
+    } else if (actionId === 'duplicate') {
+      this.addDuplicateFeature();
+    } else if (actionId === 'hide') {
+      const body = this.documentManager.getDocument().bodies.find((b) => b.id === bodyId);
+      if (body) {
+        body.visible = false;
+        this.updateBodyPresentation(bodyId, { visible: false });
+        this.applyDocumentBodyPresentation();
+        this.commitDocumentHistory('Hide body');
+        eventBus.emit('ui:status', { message: 'Body hidden' });
+      }
+    } else if (actionId === 'lock') {
+      const body = this.documentManager.getDocument().bodies.find((b) => b.id === bodyId);
+      if (body) {
+        body.locked = !body.locked;
+        this.updateBodyPresentation(bodyId, { locked: body.locked });
+        this.applyDocumentBodyPresentation();
+        this.commitDocumentHistory(body.locked ? 'Lock body' : 'Unlock body');
+        eventBus.emit('ui:status', { message: body.locked ? 'Body locked' : 'Body unlocked' });
+      }
+    } else if (actionId === 'delete') {
+      if (feature) {
+        this.setFeatureSuppressedFromBrowser(feature.id, true);
+      }
     }
   }
 
@@ -3748,6 +3863,10 @@ export class App {
       this.faceHighlight?.clearHover();
       this.edgeSelectionOverlay?.clearHover();
     });
+    viewportElement.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      this.handleViewportContextMenu(event);
+    });
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => this.handleKeyDown(e));
@@ -4748,7 +4867,11 @@ export class App {
   }
 
   private updateEdgeHoverPreselection(event: PointerEvent, element: HTMLElement): void {
+    // eslint-disable-next-line no-console
+    console.log('[updateEdgeHover]');
     const rect = element.getBoundingClientRect();
+    // eslint-disable-next-line no-console
+    console.log('[edge-pick-coords]', { clientX: event.clientX, clientY: event.clientY, rectLeft: rect.left, rectTop: rect.top, rectW: rect.width, rectH: rect.height });
     const result = this.picking.pickEdge(
       event.clientX - rect.left,
       event.clientY - rect.top,
@@ -4757,6 +4880,8 @@ export class App {
       this.viewport.getCameraControls().camera,
       this.getPickableBodies(),
     );
+    // eslint-disable-next-line no-console
+    console.log('[edge-pick]', { hasResult: !!result, edgeId: result?.edgeId, bodyId: result?.bodyId, bodyEdgeCount: this.rebuiltBodies[0]?.edges?.size });
     if (!result?.edgeId || !result.bodyId) {
       this.edgeSelectionOverlay?.clearHover();
       element.style.cursor = '';
@@ -6035,6 +6160,60 @@ export class App {
     this.beginFeaturePreview(feature, 'extrude', 'Add Extrude');
   }
 
+  /** Add a hole feature. */
+  private addHoleFeature(): void {
+    const bodyId = this.selection.activeId;
+    if (!bodyId) {
+      eventBus.emit('ui:status', { message: 'Select a body to add a hole' });
+      return;
+    }
+
+    const feature = this.getFeatureByBodyId(bodyId);
+    if (!feature) {
+      eventBus.emit('ui:status', { message: 'No feature found for selected body' });
+      return;
+    }
+
+    // Default hole parameters - will be edited in property inspector
+    const holeParams: HoleParams = {
+      bodyRef: { bodyId, featureId: feature.id },
+      position: [0, 0],
+      faceId: '',
+      holeType: 'through',
+      diameter: 0.25,
+    };
+
+    const holeFeature = createHoleFeature(holeParams);
+    this.features.push(holeFeature);
+    eventBus.emit('ui:status', { message: 'Added hole feature - edit parameters in the property inspector' });
+  }
+
+  /** Add a fillet feature. */
+  private addFilletFeature(): void {
+    const bodyId = this.selection.activeId;
+    if (!bodyId) {
+      eventBus.emit('ui:status', { message: 'Select a body to add a fillet' });
+      return;
+    }
+
+    const feature = this.getFeatureByBodyId(bodyId);
+    if (!feature) {
+      eventBus.emit('ui:status', { message: 'No feature found for selected body' });
+      return;
+    }
+
+    // Default fillet parameters - will be edited in property inspector
+    const filletParams: FilletParams = {
+      sourceFeatureId: feature.id,
+      edgeIds: [],
+      radius: 5,
+    };
+
+    const filletFeature = createFilletFeature(filletParams);
+    this.features.push(filletFeature);
+    eventBus.emit('ui:status', { message: 'Added fillet feature - edit parameters in the property inspector' });
+  }
+
   /** Cut an explicitly selected body with an explicitly selected sketch. */
   private addExtrudeCutFeature(): void {
     const sketchFeature = this.getExplicitSketchTarget();
@@ -6136,6 +6315,30 @@ export class App {
     );
 
     this.beginPatternPreview(feature, createBodyRef(target.body.id, target.feature.id));
+  }
+
+  private addCircularPatternFeature(): void {
+    const target = this.getExplicitBodyTarget();
+    if (!target) {
+      eventBus.emit('ui:status', { message: 'Select one body to pattern' });
+      return;
+    }
+
+    const params: CircularPatternParams = {
+      sourceFeatureId: target.feature.id,
+      axis: 'Z',
+      center: [0, 0, 0],
+      count: 6,
+      angle: 360,
+      symmetric: false,
+    };
+
+    const feature = createCircularPatternFeature(params);
+    this.features.push(feature);
+    eventBus.emit('ui:status', {
+      message: `Added ${feature.name} - edit parameters in Properties`,
+    });
+    this.refreshUiChrome();
   }
 
   /** Add a mirror feature from the explicitly selected body. */
@@ -6877,6 +7080,7 @@ export class App {
     options: { trackHistory?: boolean; refreshUi?: boolean } = {}
   ): { ok: boolean; diagnostics: Diagnostic[] } {
     this.interactionDiagnostics.rebuilds += 1;
+    eventBus.emit('rebuild:start', { totalFeatures: this.features.length });
     for (const feature of this.features) synchronizeSketchFeatureRefsIn(feature);
     const result = this.rebuildEngine.rebuild(this.features);
 
