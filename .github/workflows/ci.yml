@@ -22,7 +22,10 @@ jobs:
       - run: npm run test:coverage
       - run: npm run build
       - name: Install Chromium for the frame workflow
-        run: npx playwright install --with-deps chromium
+        # The hosted Ubuntu image already supplies Chromium's shared libraries.
+        # Installing optional font packages via apt stalled on the runner mirror.
+        timeout-minutes: 5
+        run: npx playwright install chromium
       - name: Verify the browser frame workflow
         run: npx playwright test tests/e2e/frame-example-workflow.spec.ts
       - run: npm run export:portfolio-frame -- --out release/artifacts/sample-frame
