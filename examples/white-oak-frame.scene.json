@@ -1,0 +1,337 @@
+{
+  "version": "0.3.0",
+  "metadata": {
+    "name": "White oak square-butt frame",
+    "created": "2026-10-26T00:00:00.000Z",
+    "modified": "2026-10-26T00:00:00.000Z"
+  },
+  "config": {
+    "units": "inch",
+    "gridSpacing": {
+      "major": 1,
+      "minor": 0.25
+    },
+    "snapEnabled": true
+  },
+  "bodies": [],
+  "features": [
+    {
+      "id": "portfolio-frame-board",
+      "type": "box",
+      "name": "Frame board: editable length",
+      "parameters": {
+        "width": 18,
+        "depth": 3,
+        "height": 0.75,
+        "anchorMode": "corner",
+        "origin": [
+          0,
+          0,
+          0
+        ]
+      },
+      "refsIn": [],
+      "refsOut": [],
+      "suppressed": false
+    }
+  ],
+  "components": [
+    {
+      "id": "portfolio-frame-board-definition",
+      "name": "Reusable white oak board",
+      "featureIds": [
+        "portfolio-frame-board"
+      ],
+      "bodyIds": [
+        "portfolio-frame-board_body"
+      ],
+      "visible": true,
+      "locked": false
+    }
+  ],
+  "componentInstances": [
+    {
+      "id": "portfolio-frame-bottom",
+      "componentId": "portfolio-frame-board-definition",
+      "name": "Bottom board",
+      "transform": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        3,
+        0,
+        0,
+        1
+      ],
+      "lockedAxes": {
+        "translateX": false,
+        "translateY": false,
+        "translateZ": false,
+        "rotateX": false,
+        "rotateY": false,
+        "rotateZ": false
+      },
+      "grounded": true,
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "portfolio-frame-top",
+      "componentId": "portfolio-frame-board-definition",
+      "name": "Top board",
+      "transform": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        3,
+        15,
+        0,
+        1
+      ],
+      "lockedAxes": {
+        "translateX": false,
+        "translateY": false,
+        "translateZ": false,
+        "rotateX": false,
+        "rotateY": false,
+        "rotateZ": false
+      },
+      "grounded": false,
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "portfolio-frame-left",
+      "componentId": "portfolio-frame-board-definition",
+      "name": "Left board",
+      "transform": [
+        0,
+        1,
+        0,
+        0,
+        -1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        3,
+        0,
+        0,
+        1
+      ],
+      "lockedAxes": {
+        "translateX": false,
+        "translateY": false,
+        "translateZ": false,
+        "rotateX": false,
+        "rotateY": false,
+        "rotateZ": false
+      },
+      "grounded": false,
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "portfolio-frame-right",
+      "componentId": "portfolio-frame-board-definition",
+      "name": "Right board",
+      "transform": [
+        0,
+        1,
+        0,
+        0,
+        -1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        24,
+        0,
+        0,
+        1
+      ],
+      "lockedAxes": {
+        "translateX": false,
+        "translateY": false,
+        "translateZ": false,
+        "rotateX": false,
+        "rotateY": false,
+        "rotateZ": false
+      },
+      "grounded": false,
+      "visible": true,
+      "locked": false
+    }
+  ],
+  "constraints": [],
+  "activeComponentId": null,
+  "bodyMetadata": {
+    "portfolio-frame-board_body": {
+      "sourceFeatureId": "portfolio-frame-board",
+      "isBoard": true,
+      "label": "White oak board definition (not an extra manufactured part)",
+      "material": {
+        "id": "white-oak",
+        "species": "White oak"
+      },
+      "grainAxis": [
+        1,
+        0,
+        0
+      ],
+      "thicknessAxis": [
+        0,
+        0,
+        1
+      ],
+      "grainPattern": "straight",
+      "stockAllowance": {
+        "length": 0.5,
+        "width": 0.25,
+        "thickness": 0.125
+      },
+      "notes": "Illustrative square-butt frame; fasteners, joinery and structural rating are not modeled."
+    },
+    "assembly-instance~3Aportfolio-frame-bottom~3Asource-body~3Aportfolio-frame-board_body:body:portfolio-frame-board_body": {
+      "sourceFeatureId": "portfolio-frame-board",
+      "isBoard": true,
+      "label": "Bottom board",
+      "material": {
+        "id": "white-oak",
+        "species": "White oak"
+      },
+      "grainAxis": [
+        1,
+        0,
+        0
+      ],
+      "thicknessAxis": [
+        0,
+        0,
+        1
+      ],
+      "grainPattern": "straight",
+      "stockAllowance": {
+        "length": 0.5,
+        "width": 0.25,
+        "thickness": 0.125
+      },
+      "notes": "Illustrative square-butt frame; fasteners, joinery and structural rating are not modeled.",
+      "partNumber": "portfolio-frame-bottom"
+    },
+    "assembly-instance~3Aportfolio-frame-top~3Asource-body~3Aportfolio-frame-board_body:body:portfolio-frame-board_body": {
+      "sourceFeatureId": "portfolio-frame-board",
+      "isBoard": true,
+      "label": "Top board",
+      "material": {
+        "id": "white-oak",
+        "species": "White oak"
+      },
+      "grainAxis": [
+        1,
+        0,
+        0
+      ],
+      "thicknessAxis": [
+        0,
+        0,
+        1
+      ],
+      "grainPattern": "straight",
+      "stockAllowance": {
+        "length": 0.5,
+        "width": 0.25,
+        "thickness": 0.125
+      },
+      "notes": "Illustrative square-butt frame; fasteners, joinery and structural rating are not modeled.",
+      "partNumber": "portfolio-frame-top"
+    },
+    "assembly-instance~3Aportfolio-frame-left~3Asource-body~3Aportfolio-frame-board_body:body:portfolio-frame-board_body": {
+      "sourceFeatureId": "portfolio-frame-board",
+      "isBoard": true,
+      "label": "Left board",
+      "material": {
+        "id": "white-oak",
+        "species": "White oak"
+      },
+      "grainAxis": [
+        0,
+        1,
+        0
+      ],
+      "thicknessAxis": [
+        0,
+        0,
+        1
+      ],
+      "grainPattern": "straight",
+      "stockAllowance": {
+        "length": 0.5,
+        "width": 0.25,
+        "thickness": 0.125
+      },
+      "notes": "Illustrative square-butt frame; fasteners, joinery and structural rating are not modeled.",
+      "partNumber": "portfolio-frame-left"
+    },
+    "assembly-instance~3Aportfolio-frame-right~3Asource-body~3Aportfolio-frame-board_body:body:portfolio-frame-board_body": {
+      "sourceFeatureId": "portfolio-frame-board",
+      "isBoard": true,
+      "label": "Right board",
+      "material": {
+        "id": "white-oak",
+        "species": "White oak"
+      },
+      "grainAxis": [
+        0,
+        1,
+        0
+      ],
+      "thicknessAxis": [
+        0,
+        0,
+        1
+      ],
+      "grainPattern": "straight",
+      "stockAllowance": {
+        "length": 0.5,
+        "width": 0.25,
+        "thickness": 0.125
+      },
+      "notes": "Illustrative square-butt frame; fasteners, joinery and structural rating are not modeled.",
+      "partNumber": "portfolio-frame-right"
+    }
+  },
+  "drawingDefinitions": [],
+  "manufacturingDefaults": {
+    "units": "in",
+    "stockAllowance": {
+      "length": 0.5,
+      "width": 0.25,
+      "thickness": 0.125
+    }
+  }
+}

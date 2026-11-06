@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { createPortfolioFrameDocument, PORTFOLIO_FRAME_IDS } from './examples/portfolioFrame';
+import { hasPortfolioFrameSource, inspectPortfolioFrame, resizePortfolioFrame } from './app/PortfolioFrameWorkflow';
+import { PortfolioFramePanel } from './ui/PortfolioFramePanel';
 import { eventBus, createUndoRedoStack, generateId } from './core';
 import { createSelectionState, select, selectMultiple, clearSelection, type SelectionState } from './core/selection';
 import { createModuleLogger } from './core/logger';
@@ -383,6 +386,8 @@ export class App {
   private autosaveManager = new AutosaveManager();
   private recentFilesStore = new RecentFilesStore();
   private featureTreePanel: FeatureTreePanel;
+  private portfolioFramePanel: PortfolioFramePanel;
+  private portableImportPending = false;
   private propertyInspector: PropertyInspector;
   private diagnosticsPanel: DiagnosticsPanel;
   private subObjectSelectionPanel: SubObjectSelectionPanel;
@@ -617,6 +622,14 @@ export class App {
     );
 
     // Initialize UI panels
+    this.portfolioFramePanel = new PortfolioFramePanel(
+      this.panelChrome.createContainer(this.layout.getPanelRight(), 'Frame example', {
+        description: 'Coordinated length and placements for the four-board example',
+        hidden: true,
+      }),
+      length => this.applyPortfolioFrameLength(length),
+    );
+
     this.subObjectSelectionPanel = new SubObjectSelectionPanel(
       this.panelChrome.createContainer(this.layout.getPanelLeft(), 'Selection', {
         description: 'Pick bodies, faces, edges, or vertices',
@@ -1173,6 +1186,12 @@ export class App {
 
   private createCommandActions(): CommandToolbarAction[] {
     return [
+      { id: 'loadFrameExample', onTrigger: () => this.loadFrameExample(),
+        isDisabled: () => this.toolSessions.activeSession !== null },
+      { id: 'importSceneJson', onTrigger: () => void this.openDocument(true),
+        isDisabled: () => this.portableImportPending || this.toolSessions.activeSession !== null },
+      { id: 'downloadSceneJson', onTrigger: () => void this.downloadSceneJson(),
+        isDisabled: () => this.toolSessions.activeSession !== null },
       { id: 'newDocument', onTrigger: () => this.newDocument() },
       { id: 'openDocument', onTrigger: () => void this.openDocument() },
       {
@@ -1515,6 +1534,11 @@ export class App {
   private createWelcomeActions() {
     return [
       {
+        label: 'Frame example',
+        description: 'Open an editable four-board woodworking example',
+        onTrigger: () => this.commandDispatcher.dispatch('loadFrameExample', undefined),
+      },
+      {
         label: 'Board',
         description: 'Add a starter box feature',
         onTrigger: () => {
@@ -1542,6 +1566,9 @@ export class App {
   }
 
   private refreshUiChrome(): void {
+    const frame = inspectPortfolioFrame(this.buildDocumentSnapshot(), this.rebuiltBodies);
+    this.panelChrome.setHidden('Frame example', frame === null);
+    this.portfolioFramePanel.refresh(frame, this.toolSessions.activeSession !== null);
     this.commandToolbar.refresh();
     this.commandPalette?.refresh();
     this.refreshModelBrowser();
@@ -1930,11 +1957,16 @@ export class App {
     if (visited.has(visitKey)) return null;
     visited.add(visitKey);
     const direct = this.documentManager.getDocument().bodyMetadata?.[bodyId];
-    if (direct && (!direct.sourceFeatureId || direct.sourceFeatureId === featureId)) {
+    const instance = this.getInstanceForBody(bodyId);
+    const instanceSourceId = instance ? this.instanceBodySourceIds.get(bodyId) : undefined;
+    const instanceSourceOwner = instanceSourceId ? this.getFeatureByBodyId(instanceSourceId)?.id : undefined;
+    if (direct && (!direct.sourceFeatureId || direct.sourceFeatureId === featureId
+      || (instanceSourceOwner !== undefined && direct.sourceFeatureId === instanceSourceOwner))) {
+      // Exact instance metadata is authored in world axes already. Prefer its
+      // part identity and axes instead of reapplying the source transform.
       return cloneSnapshot(direct);
     }
 
-    const instance = this.getInstanceForBody(bodyId);
     if (instance) {
       const sourceId = this.instanceBodySourceIds.get(bodyId);
       if (sourceId) {
@@ -6853,6 +6885,24 @@ export class App {
     if (!feature) return false;
     this.lastFeatureUpdateFailureMessage = null;
 
+    // The authored example's length edit also derives its four placements.
+    // Keep generic box editing unchanged for every other document.
+    if (featureId === PORTFOLIO_FRAME_IDS.sourceFeature
+      && hasPortfolioFrameSource(this.buildDocumentSnapshot())
+      && parameters.width !== feature.parameters.width) {
+      const changedOthers = new Set([...Object.keys(parameters), ...Object.keys(feature.parameters)]);
+      changedOthers.delete('width');
+      if ([...changedOthers].some(key => JSON.stringify(parameters[key]) !== JSON.stringify(feature.parameters[key]))) {
+        this.lastFeatureUpdateFailureMessage = 'Change the frame length separately from its cross-section or origin.';
+        eventBus.emit('ui:status', { message: this.lastFeatureUpdateFailureMessage });
+        return false;
+      }
+      return this.applyPortfolioFrameLength(parameters.width as number, {
+        trackHistory: options.trackHistory !== false,
+        announce: options.emitStatus !== false,
+      });
+    }
+
     const previousParameters = cloneSnapshot(feature.parameters);
     const previousRefsIn = [...feature.refsIn];
     const wasSelected = this.featureTreePanel.getSelectedFeature()?.id === featureId;
@@ -7371,6 +7421,61 @@ export class App {
     this.refreshUiChrome();
   }
 
+  private loadFrameExample(): void {
+    this.loadDocument(createPortfolioFrameDocument(), { seedHistory: true, recordRecent: false });
+    this.welcomeOverlay.dismiss();
+    this.layout.expandSidebar('right');
+    this.panelChrome.expand('Frame example');
+    this.fitViewToModel(false);
+    eventBus.emit('ui:status', { message: 'Frame example loaded: four boards. Edit its length in Frame example controls.' });
+  }
+
+  private applyPortfolioFrameLength(
+    length: number,
+    options: { trackHistory?: boolean; announce?: boolean } = {},
+  ): boolean {
+    if (this.toolSessions.activeSession !== null) {
+      this.portfolioFramePanel.setError('Finish or cancel the active tool before resizing the example.');
+      return false;
+    }
+    try {
+      const before = this.buildDocumentSnapshot();
+      const edited = resizePortfolioFrame(before, length);
+      const selected = this.buildHistorySelectionSnapshot();
+      this.loadDocument(edited, {
+        path: this.documentManager.currentFilePath,
+        seedHistory: false,
+        recordRecent: false,
+        restoreSelection: selected,
+      });
+      if (options.trackHistory !== false) this.commitDocumentHistory('Resize frame example');
+      // loadDocument refreshes chrome before this edit is in history. Refresh
+      // once more after committing so pointer Undo/Redo matches keyboard state.
+      this.refreshUiChrome();
+      this.panelChrome.expand('Frame example');
+      this.portfolioFramePanel.setError(null);
+      if (options.announce !== false) eventBus.emit('ui:status', {
+        message: `Frame length updated to ${length} in; all four placements rebuilt.`,
+      });
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Frame length could not be changed';
+      this.lastFeatureUpdateFailureMessage = message;
+      this.portfolioFramePanel.setError(message);
+      if (options.announce !== false) eventBus.emit('ui:status', { message });
+      return false;
+    }
+  }
+
+  private async downloadSceneJson(): Promise<void> {
+    const snapshot = this.buildDocumentSnapshot();
+    const result = await saveToFile(snapshot, `${snapshot.metadata.name}.json`, { portable: true });
+    eventBus.emit('ui:status', { message: result.ok
+      ? `Scene JSON download started: ${result.path}`
+      : `Scene download failed: ${result.error}` });
+    // A download is a copy, not an attached writable file or proof of disk persistence.
+  }
+
   private async saveDocument(): Promise<void> {
     const snapshot = this.buildDocumentSnapshot();
     const result = await saveToFile(snapshot, `${snapshot.metadata.name}.json`);
@@ -7392,8 +7497,12 @@ export class App {
     }
   }
 
-  private async openDocument(): Promise<void> {
-    const result = await loadFromFile();
+  private async openDocument(portable = false): Promise<void> {
+    this.portableImportPending = portable;
+    this.refreshUiChrome();
+    const result = await loadFromFile({ portable });
+    this.portableImportPending = false;
+    this.refreshUiChrome();
 
     if (result.ok) {
       this.loadDocument(result.document, {
@@ -7401,8 +7510,19 @@ export class App {
         seedHistory: true,
         recordRecent: true,
       });
+      this.welcomeOverlay.dismiss();
+      this.fitViewToModel(false);
+      // Portable imports have no retained writable file handle. Keep a local
+      // snapshot immediately so Recent files can reopen them after a reload,
+      // even when the user has not made another edit to trigger autosave.
+      const recovery = portable ? this.autosaveManager.saveNow(this.buildDocumentSnapshot(), {
+        filePath: result.path,
+        reason: 'portable-import',
+      }) : null;
       eventBus.emit('document:load', { path: result.path });
-      eventBus.emit('ui:status', { message: `Opened: ${result.path}` });
+      eventBus.emit('ui:status', { message: recovery && !recovery.ok
+        ? `Opened: ${result.path}; local recovery unavailable: ${recovery.error}`
+        : `Opened: ${result.path}` });
     } else if (result.error !== 'Open cancelled') {
       eventBus.emit('ui:status', { message: `Open failed: ${result.error}` });
     }
@@ -7505,6 +7625,9 @@ export class App {
     }
     this.sceneObjects.clear();
     this.meshCache.clear();
+
+    // A newly loaded snapshot must not keep a rejected input draft from the old scene.
+    this.portfolioFramePanel.reset();
 
     // Load document
     this.documentManager.load(doc, options.path ?? undefined);
@@ -9477,6 +9600,7 @@ export class App {
   private undoLastChange(): void {
     this.cancelActiveInteraction();
     this.refreshPresentHistorySelection();
+    const undoneLabel = this.undoRedo.getState().current?.label;
     const result = this.undoRedo.undo();
     if (!result) {
       eventBus.emit('ui:status', { message: 'Nothing to undo' });
@@ -9493,7 +9617,7 @@ export class App {
       filePath: this.documentManager.currentFilePath,
       reason: 'undo',
     });
-    eventBus.emit('ui:status', { message: `Undo: ${result.entry.label}` });
+    eventBus.emit('ui:status', { message: `Undo: ${undoneLabel ?? result.entry.label}` });
   }
 
   private redoLastChange(): void {
@@ -9528,6 +9652,8 @@ export class App {
       });
       this.undoRedo.markDirty();
       this.refreshDocumentDirtyState();
+      this.welcomeOverlay.dismiss();
+      this.fitViewToModel(false);
       eventBus.emit('ui:status', {
         message: `Reopened ${entry.name} from the latest autosaved snapshot`,
       });

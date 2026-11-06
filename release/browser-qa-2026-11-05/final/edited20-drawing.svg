@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="7268" height="2144" viewBox="0 0 7268 2144">
+<title>Shop Drawing 1</title>
+<style>text{font-family:Arial,sans-serif;font-size:11px;fill:#111;stroke:none}line.outline{fill:none;stroke:#111;stroke-width:1.4;vector-effect:non-scaling-stroke}line.hidden{fill:none;stroke:#777;stroke-width:.8;stroke-dasharray:6 4;vector-effect:non-scaling-stroke}line.dimension{fill:none;stroke:#555;stroke-width:.75}line.annotation{fill:none;stroke:#111;stroke-width:1}line.grain{fill:none;stroke:#9a5d25;stroke-width:1}text.dimension,text.annotation{fill:#111;stroke:none}text.grain{fill:#9a5d25;stroke:none}.view-label{font-size:12px;font-weight:bold;letter-spacing:1px}.drawing-title{font-size:18px;font-weight:bold}</style>
+<defs><marker id="arrow" markerWidth="6" markerHeight="6" refX="0" refY="3" orient="auto"><path d="M6,0 L0,3 L6,6 z" fill="#555"/></marker><marker id="arrow-end" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#555"/></marker></defs>
+<g data-view="front">
+<text id="front:label" class="annotation view-label" x="1314" y="41" font-size="12px" text-anchor="middle">FRONT</text>
+<line id="front:dimension:height" class="dimension" x1="2584" y1="995" x2="2584" y2="1067" marker-start="url(#arrow)" marker-end="url(#arrow-end)"/>
+<line id="front:dimension:height-extension-bottom" class="dimension" x1="2566" y1="1067" x2="2589" y2="1067"/>
+<line id="front:dimension:height-extension-top" class="dimension" x1="2566" y1="995" x2="2589" y2="995"/>
+<line id="front:dimension:width" class="dimension" x1="66" y1="1089" x2="2562" y2="1089" marker-start="url(#arrow)" marker-end="url(#arrow-end)"/>
+<line id="front:dimension:width-extension-left" class="dimension" x1="66" y1="1071" x2="66" y2="1094"/>
+<line id="front:dimension:width-extension-right" class="dimension" x1="2562" y1="1071" x2="2562" y2="1094"/>
+<text id="front:dimension:height-label" class="dimension" x="2589" y="1031" font-size="11px" text-anchor="middle" transform="rotate(90 2589 1031)">0.75 in</text>
+<text id="front:dimension:width-label" class="dimension" x="1314" y="1085" font-size="11px" text-anchor="middle">26 in</text>
+<line id="front:edge:0000" class="outline" x1="66" y1="1067" x2="66" y2="995"/>
+<line id="front:edge:0001" class="outline" x1="66" y1="1067" x2="354" y2="1067"/>
+<line id="front:edge:0002" class="outline" x1="66" y1="995" x2="354" y2="995"/>
+<line id="front:edge:0003" class="outline" x1="354" y1="1067" x2="354" y2="995"/>
+<line id="front:edge:0004" class="outline" x1="354" y1="1067" x2="2274" y2="1067"/>
+<line id="front:edge:0005" class="outline" x1="354" y1="995" x2="2274" y2="995"/>
+<line id="front:edge:0006" class="outline" x1="2274" y1="1067" x2="2274" y2="995"/>
+<line id="front:edge:0007" class="outline" x1="2274" y1="1067" x2="2562" y2="1067"/>
+<line id="front:edge:0008" class="outline" x1="2274" y1="995" x2="2562" y2="995"/>
+<line id="front:edge:0009" class="outline" x1="2562" y1="1067" x2="2562" y2="995"/>
+</g>
+<g data-view="top">
+<text id="top:label" class="annotation view-label" x="3922" y="41" font-size="12px" text-anchor="middle">TOP</text>
+<line id="top:dimension:height" class="dimension" x1="5192" y1="71" x2="5192" y2="1991" marker-start="url(#arrow)" marker-end="url(#arrow-end)"/>
+<line id="top:dimension:height-extension-bottom" class="dimension" x1="5174" y1="1991" x2="5197" y2="1991"/>
+<line id="top:dimension:height-extension-top" class="dimension" x1="5174" y1="71" x2="5197" y2="71"/>
+<line id="top:dimension:width" class="dimension" x1="2674" y1="2013" x2="5170" y2="2013" marker-start="url(#arrow)" marker-end="url(#arrow-end)"/>
+<line id="top:dimension:width-extension-left" class="dimension" x1="2674" y1="1995" x2="2674" y2="2018"/>
+<line id="top:dimension:width-extension-right" class="dimension" x1="5170" y1="1995" x2="5170" y2="2018"/>
+<text id="top:dimension:height-label" class="dimension" x="5197" y="1031" font-size="11px" text-anchor="middle" transform="rotate(90 5197 1031)">20 in</text>
+<text id="top:dimension:width-label" class="dimension" x="3922" y="2009" font-size="11px" text-anchor="middle">26 in</text>
+<line id="top:edge:0000" class="outline" x1="2674" y1="1991" x2="2674" y2="71"/>
+<line id="top:edge:0001" class="outline" x1="2674" y1="1991" x2="2962" y2="1991"/>
+<line id="top:edge:0002" class="outline" x1="2674" y1="71" x2="2962" y2="71"/>
+<line id="top:edge:0003" class="outline" x1="2962" y1="1991" x2="2962" y2="1703"/>
+<line id="top:edge:0004" class="outline" x1="2962" y1="1991" x2="4882" y2="1991"/>
+<line id="top:edge:0005" class="outline" x1="2962" y1="1703" x2="2962" y2="359"/>
+<line id="top:edge:0006" class="outline" x1="2962" y1="1703" x2="4882" y2="1703"/>
+<line id="top:edge:0007" class="outline" x1="2962" y1="359" x2="2962" y2="71"/>
+<line id="top:edge:0008" class="outline" x1="2962" y1="359" x2="4882" y2="359"/>
+<line id="top:edge:0009" class="outline" x1="2962" y1="71" x2="4882" y2="71"/>
+<line id="top:edge:0010" class="outline" x1="4882" y1="1991" x2="4882" y2="1703"/>
+<line id="top:edge:0011" class="outline" x1="4882" y1="1991" x2="5170" y2="1991"/>
+<line id="top:edge:0012" class="outline" x1="4882" y1="1703" x2="4882" y2="359"/>
+<line id="top:edge:0013" class="outline" x1="4882" y1="359" x2="4882" y2="71"/>
+<line id="top:edge:0014" class="outline" x1="4882" y1="71" x2="5170" y2="71"/>
+<line id="top:edge:0015" class="outline" x1="5170" y1="1991" x2="5170" y2="71"/>
+</g>
+<g data-view="right">
+<text id="right:label" class="annotation view-label" x="6242" y="41" font-size="12px" text-anchor="middle">RIGHT</text>
+<line id="right:dimension:height" class="dimension" x1="7224" y1="995" x2="7224" y2="1067" marker-start="url(#arrow)" marker-end="url(#arrow-end)"/>
+<line id="right:dimension:height-extension-bottom" class="dimension" x1="7206" y1="1067" x2="7229" y2="1067"/>
+<line id="right:dimension:height-extension-top" class="dimension" x1="7206" y1="995" x2="7229" y2="995"/>
+<line id="right:dimension:width" class="dimension" x1="5282" y1="1089" x2="7202" y2="1089" marker-start="url(#arrow)" marker-end="url(#arrow-end)"/>
+<line id="right:dimension:width-extension-left" class="dimension" x1="5282" y1="1071" x2="5282" y2="1094"/>
+<line id="right:dimension:width-extension-right" class="dimension" x1="7202" y1="1071" x2="7202" y2="1094"/>
+<text id="right:dimension:height-label" class="dimension" x="7229" y="1031" font-size="11px" text-anchor="middle" transform="rotate(90 7229 1031)">0.75 in</text>
+<text id="right:dimension:width-label" class="dimension" x="6242" y="1085" font-size="11px" text-anchor="middle">20 in</text>
+<line id="right:edge:0000" class="outline" x1="5282" y1="1067" x2="5282" y2="995"/>
+<line id="right:edge:0001" class="outline" x1="5282" y1="1067" x2="5570" y2="1067"/>
+<line id="right:edge:0002" class="outline" x1="5282" y1="995" x2="5570" y2="995"/>
+<line id="right:edge:0004" class="outline" x1="5570" y1="1067" x2="6914" y2="1067"/>
+<line id="right:edge:0005" class="outline" x1="5570" y1="995" x2="6914" y2="995"/>
+<line id="right:edge:0007" class="outline" x1="6914" y1="1067" x2="7202" y2="1067"/>
+<line id="right:edge:0008" class="outline" x1="6914" y1="995" x2="7202" y2="995"/>
+<line id="right:edge:0009" class="outline" x1="7202" y1="1067" x2="7202" y2="995"/>
+</g>
+<line id="title-block:bottom" class="annotation" x1="7240" y1="2116" x2="28" y2="2116"/>
+<line id="title-block:divider" class="annotation" x1="7018" y1="2048" x2="7018" y2="2116"/>
+<line id="title-block:left" class="annotation" x1="28" y1="2116" x2="28" y2="2048"/>
+<line id="title-block:right" class="annotation" x1="7240" y1="2048" x2="7240" y2="2116"/>
+<line id="title-block:top" class="annotation" x1="28" y1="2048" x2="7240" y2="2048"/>
+<text id="title-block:scale" class="annotation" x="7030" y="2073" font-size="11px" text-anchor="start">SCALE 1:1</text>
+<text id="title-block:subtitle" class="annotation" x="40" y="2099" font-size="11px" text-anchor="start">ORTHOGRAPHIC SHOP DRAWING</text>
+<text id="title-block:title" class="annotation drawing-title" x="40" y="2077" font-size="18px" text-anchor="start">Shop Drawing 1</text>
+<text id="title-block:units" class="annotation" x="7030" y="2097" font-size="11px" text-anchor="start">UNITS IN</text>
+</svg>

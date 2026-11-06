@@ -14,6 +14,9 @@ export type AppCommandId =
   | 'newDocument'
   | 'openDocument'
   | 'saveDocument'
+  | 'loadFrameExample'
+  | 'importSceneJson'
+  | 'downloadSceneJson'
   | 'undo'
   | 'redo'
   | 'addBox'
@@ -122,6 +125,30 @@ export const SHORTCUT_CATEGORY_ORDER: ShortcutCategory[] = [
 ];
  
 export const COMMAND_DEFINITIONS: AppCommandDefinition[] = [
+  {
+    id: 'loadFrameExample',
+    icon: 'Frame',
+    label: 'Frame example',
+    description: 'Load the editable four-board white oak frame example',
+    toolbarGroup: 'File',
+    keywords: ['sample', 'woodworking', 'white oak', 'assembly'],
+  },
+  {
+    id: 'importSceneJson',
+    icon: 'Import',
+    label: 'Import scene JSON',
+    description: 'Choose a saved scene JSON using the portable browser file chooser',
+    toolbarGroup: 'File',
+    keywords: ['open', 'upload', 'scene', 'file'],
+  },
+  {
+    id: 'downloadSceneJson',
+    icon: 'Download',
+    label: 'Download scene JSON',
+    description: 'Download a copy of the current editable scene and feature history',
+    toolbarGroup: 'File',
+    keywords: ['save', 'export', 'scene', 'file'],
+  },
   {
     id: 'newDocument',
     icon: 'ï¼‹',

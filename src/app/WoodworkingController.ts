@@ -61,11 +61,15 @@ export class WoodworkingController {
     visited.add(visitKey);
 
     const direct = this.d.getDocument().bodyMetadata?.[bodyId];
-    if (direct && (!direct.sourceFeatureId || direct.sourceFeatureId === featureId)) {
+    const instance = this.d.getInstanceForBody(bodyId);
+    const instanceSourceId = instance ? this.d.instanceBodySourceIds.get(bodyId) : undefined;
+    const instanceSourceOwner = instanceSourceId ? this.d.getFeatureByBodyId(instanceSourceId)?.id : undefined;
+    if (direct && (!direct.sourceFeatureId || direct.sourceFeatureId === featureId
+      || (instanceSourceOwner !== undefined && direct.sourceFeatureId === instanceSourceOwner))) {
+      // Per-instance authoring stores world axes, not source-local axes.
       return cloneMetadata(direct);
     }
 
-    const instance = this.d.getInstanceForBody(bodyId);
     if (instance) {
       const sourceId = this.d.instanceBodySourceIds.get(bodyId);
       if (sourceId) {

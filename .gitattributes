@@ -1,0 +1,13 @@
+# Source uses consistent line endings in fresh checkouts.
+*.ts text eol=lf
+*.css text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.html text eol=lf
+
+# Saved scenes and acceptance receipts are identified by exact bytes.
+examples/*.scene.json -text
+release/browser-qa-2026-11-05/** -text whitespace=cr-at-eol
+release/coverage-migration-baseline.json -text

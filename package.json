@@ -1,6 +1,6 @@
 {
   "name": "parametric-modeler",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "A domain-specific 3D CAD modeler for woodworking",
   "scripts": {
@@ -17,8 +17,9 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:performance": "vitest run tests/performance",
-    "release:web": "npm run build && node scripts/package-web-release.mjs",
-    "prepare": "husky"
+    "release:web": "npm run build && node scripts/write-third-party-notices.mjs && node scripts/package-web-release.mjs",
+    "prepare": "husky",
+    "export:portfolio-frame": "tsx scripts/export-portfolio-frame.ts"
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",
@@ -29,15 +30,17 @@
     "@axe-core/playwright": "^4.10.2",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.61.1",
+    "@types/node": "22.20.5",
     "@types/three": "^0.170.0",
-    "@vitest/coverage-v8": "^3.2.6",
+    "@vitest/coverage-v8": "5.0.5",
     "eslint": "^10.7.0",
     "globals": "^17.7.0",
     "husky": "^9.1.7",
     "jsdom": "^29.1.1",
+    "tsx": "4.23.15",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.63.0",
     "vite": "^8.1.4",
-    "vitest": "^3.2.6"
+    "vitest": "5.0.5"
   }
 }

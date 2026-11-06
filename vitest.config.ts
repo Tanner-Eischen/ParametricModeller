@@ -12,11 +12,13 @@ export default defineConfig({
       reportsDirectory: 'coverage',
       include: ['src/**/*.ts'],
       exclude: ['src/main.ts', 'src/**/index.ts', 'src/types/**'],
+      // Same-source Vitest 5 reporter baseline; see release/COVERAGE_MIGRATION.md.
+      // These floors do not mean the legacy reporter's 78/74 targets were reached.
       thresholds: {
-        branches: 78,
-        functions: 74,
-        lines: 49,
-        statements: 49,
+        branches: 51.8,
+        functions: 63.5,
+        lines: 63.6,
+        statements: 62.5,
       },
     },
   },

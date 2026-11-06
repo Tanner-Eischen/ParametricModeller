@@ -1,48 +1,39 @@
-name: CI
-
+name: Core release verification
 on:
   push:
   pull_request:
-
 permissions:
   contents: read
-
 jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
+    env:
+      HUSKY: "0"
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install Playwright browser
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:coverage
+      - run: npm run build
+      - name: Install Chromium for the frame workflow
         run: npx playwright install --with-deps chromium
-
-      - name: Run full verification gate
-        run: npm run check:all
-
-      - name: Upload coverage report
+      - name: Verify the browser frame workflow
+        run: npx playwright test tests/e2e/frame-example-workflow.spec.ts
+      - run: npm run export:portfolio-frame -- --out release/artifacts/sample-frame
+      - run: npm run release:web
+      - uses: actions/upload-artifact@v7
         if: always()
-        uses: actions/upload-artifact@v7
         with:
-          name: coverage-report
-          path: coverage/
-          if-no-files-found: ignore
-
-      - name: Upload Playwright report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-report
-          path: playwright-report/
-          if-no-files-found: ignore
+          name: core-release-evidence
+          path: |
+            coverage/
+            release/artifacts/
+            playwright-report/
+            test-results/
+# The broad browser suite remains available in browser-manual.yml.

@@ -1,0 +1,152 @@
+{
+  "tested_at": "2026-11-06T19:05:05.772Z",
+  "origin": "http://127.0.0.1:4173",
+  "build": "0.2.1 production Vite preview",
+  "checks": [
+    {
+      "check": "load-frame",
+      "expected": [
+        4,
+        24,
+        18,
+        0.75
+      ],
+      "actual": "4 physical boards; outer dimensions 24 × 18 × 0.75 in"
+    },
+    {
+      "check": "edit-20",
+      "actual": "4 physical boards; outer dimensions 26 × 20 × 0.75 in",
+      "undoEnabled": true
+    },
+    {
+      "check": "pointer-undo",
+      "actual": "4 physical boards; outer dimensions 24 × 18 × 0.75 in"
+    },
+    {
+      "check": "pointer-redo",
+      "actual": "4 physical boards; outer dimensions 26 × 20 × 0.75 in"
+    },
+    {
+      "check": "reject-six",
+      "error": "Frame board length must be finite and greater than 6 inches",
+      "actual": "4 physical boards; outer dimensions 26 × 20 × 0.75 in"
+    },
+    {
+      "check": "invalid-edit-no-history",
+      "actual": "4 physical boards; outer dimensions 24 × 18 × 0.75 in",
+      "undoEnabled": false
+    },
+    {
+      "check": "real-scene-download",
+      "features": [
+        {
+          "id": "portfolio-frame-board",
+          "parameters": {
+            "width": 20,
+            "depth": 3,
+            "height": 0.75,
+            "anchorMode": "corner",
+            "origin": [
+              0,
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "instances": [
+        "portfolio-frame-bottom",
+        "portfolio-frame-top",
+        "portfolio-frame-left",
+        "portfolio-frame-right"
+      ],
+      "bodyCount": 4
+    },
+    {
+      "check": "import-downloaded-scene",
+      "actual": "4 physical boards; outer dimensions 26 × 20 × 0.75 in",
+      "title": "White oak square-butt frame - Parametric Modeler"
+    },
+    {
+      "check": "recent-file-recovery-after-reload",
+      "actual": "4 physical boards; outer dimensions 26 × 20 × 0.75 in",
+      "status": "Reopened White oak square-butt frame from the latest autosaved snapshot"
+    },
+    {
+      "check": "real-csv",
+      "actual": "Part names,Quantity,Material,Grade,Stock code,Finished length,Finished width,Finished thickness,Stock length,Stock width,Stock thickness,Unit,Grain,Board feet,Notes\r\nBottom board; Left board; Right board; Top board,4,White oak,,,20,3,0.75,20.5,3.25,0.875,in,straight,1.619,\"Illustrative square-butt frame; fasteners, joinery and structural rating are not modeled.\"\r\n"
+    },
+    {
+      "check": "bad-import-keeps-frame",
+      "status": "Open failed: Unexpected end of JSON input",
+      "actual": "4 physical boards; outer dimensions 26 × 20 × 0.75 in"
+    },
+    {
+      "check": "recovery-and-bad-import-identities",
+      "featuresEqual": true,
+      "instancesEqual": true,
+      "metadataEqual": true
+    },
+    {
+      "check": "viewport-picking",
+      "status": "Box | Body selected",
+      "label": null
+    },
+    {
+      "check": "clear-selection",
+      "status": ""
+    },
+    {
+      "check": "rebuild-view",
+      "actual": "4 physical boards; outer dimensions 26 × 20 × 0.75 in",
+      "status": "Top view"
+    },
+    {
+      "check": "viewport-900",
+      "actual": {
+        "controls": [
+          {
+            "box": {
+              "bottom": 472.53125,
+              "height": 35.53125,
+              "left": 550.6666870117188,
+              "right": 880.0000305175781,
+              "top": 437,
+              "width": 329.3333435058594,
+              "x": 550.6666870117188,
+              "y": 437
+            },
+            "label": "Frame board length (in)"
+          },
+          {
+            "box": {
+              "bottom": 518.0625,
+              "height": 35.53125,
+              "left": 550.6666870117188,
+              "right": 880.0000305175781,
+              "top": 482.53125,
+              "width": 329.3333435058594,
+              "x": 550.6666870117188,
+              "y": 482.53125
+            },
+            "label": "Apply frame length"
+          }
+        ],
+        "height": 700,
+        "scrollWidth": 900,
+        "width": 900
+      }
+    },
+    {
+      "check": "orbit-drag",
+      "actual": "4 physical boards; outer dimensions 26 × 20 × 0.75 in",
+      "note": "Left drag in empty viewport changed camera; geometry bounds retained."
+    }
+  ],
+  "limits": [
+    "Reload starts Untitled; use Recent files for imported scene recovery.",
+    "No general assembly solver or arbitrary instance manipulation acceptance.",
+    "Desktop1280x720 and narrow900x700 tested; mobile unverified."
+  ],
+  "expected_error": "Malformed JSON import intentionally logged serializer error; active scene preserved."
+}

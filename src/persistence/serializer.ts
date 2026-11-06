@@ -192,14 +192,15 @@ function migrateLegacyFacePlaneReferences(features: Document['features']): Docum
  */
 export async function saveToFile(
   doc: Document,
-  suggestedName = 'model.json'
+  suggestedName = 'model.json',
+  options: { portable?: boolean } = {},
 ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   const result = serialize(doc);
   if (!result.ok) return result;
 
   try {
     // Try File System Access API first (supported in modern browsers)
-    if ('showSaveFilePicker' in window) {
+    if (!options.portable && 'showSaveFilePicker' in window) {
       const handle = await (window as Window & { showSaveFilePicker: (options: unknown) => Promise<FileSystemFileHandle> }).showSaveFilePicker({
         suggestedName,
         types: [
@@ -236,12 +237,12 @@ export async function saveToFile(
 /**
  * Load document from file using File System Access API or file input
  */
-export async function loadFromFile(): Promise<
+export async function loadFromFile(options: { portable?: boolean } = {}): Promise<
   { ok: true; document: Document; path: string } | { ok: false; error: string }
 > {
   try {
     // Try File System Access API first
-    if ('showOpenFilePicker' in window) {
+    if (!options.portable && 'showOpenFilePicker' in window) {
       const handles = await (window as Window & { showOpenFilePicker: (options: unknown) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker({
         types: [
           {
@@ -271,26 +272,42 @@ export async function loadFromFile(): Promise<
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = '.json';
+      input.hidden = true;
+      input.setAttribute('aria-label', 'Import scene JSON file');
+      document.body.appendChild(input);
+      type Outcome = { ok: true; document: Document; path: string } | { ok: false; error: string };
+      const finish = (outcome: Outcome): void => {
+        input.remove();
+        resolve(outcome);
+      };
+      input.addEventListener('cancel', () => finish({ ok: false, error: 'Open cancelled' }), { once: true });
 
       input.onchange = async () => {
         const file = input.files?.[0];
         if (!file) {
-          resolve({ ok: false, error: 'No file selected' });
+          finish({ ok: false, error: 'No file selected' });
           return;
         }
 
-        const json = await file.text();
-        const result = deserialize(json);
-
-        if (result.ok) {
-          log.info('Document loaded', { name: file.name });
-          resolve({ ok: true, document: result.document, path: file.name });
-        } else {
-          resolve(result);
+        try {
+          const json = await file.text();
+          const result = deserialize(json);
+          if (result.ok) {
+            log.info('Document loaded', { name: file.name });
+            finish({ ok: true, document: result.document, path: file.name });
+          } else {
+            finish(result);
+          }
+        } catch (error) {
+          finish({ ok: false, error: error instanceof Error ? error.message : 'File could not be read' });
         }
       };
 
-      input.click();
+      try {
+        input.click();
+      } catch (error) {
+        finish({ ok: false, error: error instanceof Error ? error.message : 'File chooser could not open' });
+      }
     });
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
@@ -313,7 +330,9 @@ function downloadFile(content: string, filename: string): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  document.body.appendChild(a);
   a.click();
-
-  URL.revokeObjectURL(url);
+  a.remove();
+  // Let the browser consume the download before releasing its blob URL.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

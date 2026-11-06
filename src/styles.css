@@ -18,6 +18,47 @@
   --surface-elevated: rgba(18, 18, 18, 0.94);
 }
 
+/* Scoped controls for the authored frame example; other property editors are unchanged. */
+.portfolio-frame-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+  padding: 10px;
+  font: inherit;
+  color: var(--text-primary);
+}
+
+.portfolio-frame-panel__field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.portfolio-frame-panel input,
+.portfolio-frame-panel button {
+  min-width: 0;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.4;
+}
+
+.portfolio-frame-panel input { background: #111; }
+.portfolio-frame-panel__apply { background: var(--accent-color); cursor: pointer; }
+.portfolio-frame-panel__apply:hover:not(:disabled) { background: var(--accent-strong); }
+.portfolio-frame-panel :disabled { opacity: 0.55; cursor: default; }
+.portfolio-frame-panel :focus-visible { outline: 2px solid #4fb3f6; outline-offset: 2px; }
+.portfolio-frame-panel input[aria-invalid='true'] { border-color: #ffaaaa; }
+.portfolio-frame-panel__summary,
+.portfolio-frame-panel__note,
+.portfolio-frame-panel__error { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.portfolio-frame-panel__note { color: #aaa; }
+.portfolio-frame-panel__error { color: #ffaaaa; }
+
 html, body {
   width: 100%;
   height: 100%;
