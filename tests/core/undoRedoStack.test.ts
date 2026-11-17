@@ -124,3 +124,60 @@ describe('UndoRedoStack', () => {
     expect(state.undo?.label).toBe('Second');
   });
 });
+
+describe('UndoRedoStack asynchronous save revisions', () => {
+  it('marks the written entry clean rather than a later current entry', () => {
+    const stack = new UndoRedoStack<TestSnapshot>();
+    stack.seed({ value: 0 });
+    const written = stack.commit({ value: 1 }, 'Saved').entry.id;
+    stack.commit({ value: 2 }, 'Newer edit');
+    stack.markClean(written);
+    expect(stack.isDirty()).toBe(true);
+    stack.undo(); expect(stack.isDirty()).toBe(false);
+    stack.redo(); expect(stack.isDirty()).toBe(true);
+  });
+
+  it('can mark a redo entry clean without cleaning the current earlier entry', () => {
+    const stack = new UndoRedoStack<TestSnapshot>();
+    stack.seed({ value: 0 });
+    const written = stack.commit({ value: 1 }, 'Saved').entry.id;
+    stack.undo(); stack.markClean(written);
+    expect(stack.isDirty()).toBe(true);
+    stack.redo(); expect(stack.isDirty()).toBe(false);
+  });
+
+  it('never substitutes the current entry for a saved revision truncated by branching', () => {
+    const stack = new UndoRedoStack<TestSnapshot>();
+    stack.seed({ value: 0 });
+    const written = stack.commit({ value: 1 }, 'Abandoned branch').entry.id;
+    stack.undo(); stack.commit({ value: 2 }, 'Replacement branch');
+    stack.markClean(written);
+    expect(stack.isDirty()).toBe(true);
+    stack.undo(); expect(stack.isDirty()).toBe(true);
+  });
+
+  it('cannot mark a replacement document clean using an old revision ID', () => {
+    const stack = new UndoRedoStack<TestSnapshot>();
+    const old = stack.seed({ value: 0 }).id;
+    const replacement = stack.seed({ value: 1 }).id;
+    expect(replacement).not.toBe(old);
+    stack.markClean(old);
+    expect(stack.isDirty()).toBe(true);
+    stack.markClean(replacement); expect(stack.isDirty()).toBe(false);
+  });
+
+  it('keeps current work dirty if the saved revision has aged out of capacity', () => {
+    const stack = new UndoRedoStack<TestSnapshot>({ capacity: 2 });
+    const written = stack.seed({ value: 0 }).id;
+    stack.commit({ value: 1 }, 'First'); stack.commit({ value: 2 }, 'Second');
+    stack.markClean(written); expect(stack.isDirty()).toBe(true);
+    stack.undo(); expect(stack.isDirty()).toBe(true);
+  });
+
+  it('treats explicit null as unknown saved revision while retaining no-argument behavior', () => {
+    const stack = new UndoRedoStack<TestSnapshot>();
+    stack.seed({ value: 0 }); stack.markClean(null);
+    expect(stack.isDirty()).toBe(true);
+    stack.markClean(); expect(stack.isDirty()).toBe(false);
+  });
+});

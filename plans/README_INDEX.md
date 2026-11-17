@@ -10,6 +10,8 @@ This pack expands each milestone from the progressive plan into:
 
 ## Milestones
 
+- [November 2026 implementation audit](audit_2026_11_16.md)
+- [November audit fixes and verification](audit_fixes_2026_11_16.md)
 - [Professionalization roadmap](professionalization_roadmap.md)
 
 - [Milestone 00: Project skeleton and rendering](milestone_00.md)

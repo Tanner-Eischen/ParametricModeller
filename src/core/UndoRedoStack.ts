@@ -159,9 +159,10 @@ export class UndoRedoStack<T> {
     };
   }
 
-  markClean(): void {
-    const current = this.getCurrentEntry();
-    this.cleanEntryId = current?.id ?? null;
+  markClean(entryId: number | null = this.getCurrentEntry()?.id ?? null): void {
+    // A save may finish after editing, undo, or truncating the saved revision.
+    // Never substitute the current revision for the one actually written.
+    this.cleanEntryId = this.entries.some((entry) => entry.id === entryId) ? entryId : null;
   }
 
   /** Force the present entry dirty, for example after recovering an autosave. */

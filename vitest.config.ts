@@ -5,6 +5,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // Bound jsdom worker startup and memory use on high-core-count developer machines.
+    maxWorkers: 4,
     include: ['tests/**/*.test.ts'],
     coverage: {
       provider: 'v8',

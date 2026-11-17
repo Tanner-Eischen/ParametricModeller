@@ -1,6 +1,7 @@
 import type { Document } from '../types';
 import { createDefaultDocument } from '../types';
 import { createModuleLogger } from '../core/logger';
+import { validateDocumentStructure } from './DocumentValidation';
 import {
   CURRENT_SCHEMA_VERSION,
   migrateDocumentSchema,
@@ -40,6 +41,8 @@ export type DeserializeOutcome = DeserializeResult | DeserializeError;
  */
 export function serialize(doc: Document): SerializeOutcome {
   try {
+    const inputError = validateDocumentStructure(doc, { allowLegacyDefaults: true });
+    if (inputError) return { ok: false, error: inputError };
     const migration = migrateDocumentSchema(
       doc as unknown as Record<string, unknown>
     );
@@ -49,6 +52,8 @@ export function serialize(doc: Document): SerializeOutcome {
     const normalizedDocument = normalizeDocument(
       migration.document as Partial<Document>
     );
+    const structureError = validateDocumentStructure(normalizedDocument);
+    if (structureError) return { ok: false, error: structureError };
     const json = JSON.stringify(normalizedDocument, null, 2);
     log.debug('Document serialized', { size: json.length });
     return { ok: true, json };
@@ -66,10 +71,8 @@ export function deserialize(json: string): DeserializeOutcome {
   try {
     const parsed = JSON.parse(json) as unknown;
 
-    // Validate basic structure
-    if (!isDocumentLike(parsed)) {
-      return { ok: false, error: 'Invalid document structure' };
-    }
+    const inputError = validateDocumentStructure(parsed, { allowLegacyDefaults: true });
+    if (inputError) return { ok: false, error: inputError };
 
     const migration = migrateDocumentSchema(parsed as Record<string, unknown>);
     if (!migration.ok) {
@@ -81,6 +84,8 @@ export function deserialize(json: string): DeserializeOutcome {
 
     // Validate and normalize the document
     const doc = normalizeDocument(migration.document as Partial<Document>);
+    const structureError = validateDocumentStructure(doc);
+    if (structureError) return { ok: false, error: structureError };
 
     log.debug('Document deserialized', { name: doc.metadata.name });
     return { ok: true, document: doc, migrationDiagnostics: migration.diagnostics };
@@ -89,20 +94,6 @@ export function deserialize(json: string): DeserializeOutcome {
     log.error('Deserialization failed', error);
     return { ok: false, error };
   }
-}
-
-/**
- * Check if parsed object looks like a document
- */
-function isDocumentLike(value: unknown): value is Partial<Document> {
-  if (typeof value !== 'object' || value === null) return false;
-
-  const doc = value as Record<string, unknown>;
-  return (
-    typeof doc.version === 'string' &&
-    typeof doc.metadata === 'object' &&
-    Array.isArray((doc as Record<string, unknown>).bodies)
-  );
 }
 
 /**
@@ -123,7 +114,7 @@ function normalizeDocument(partial: Partial<Document>): Document {
     config: {
       ...partial.config,
       units: partial.config?.units ?? defaults.config.units,
-      gridSpacing: partial.config?.gridSpacing ?? defaults.config.gridSpacing,
+      gridSpacing: { ...defaults.config.gridSpacing, ...partial.config?.gridSpacing },
       snapEnabled: partial.config?.snapEnabled ?? defaults.config.snapEnabled,
     },
     bodies: partial.bodies ?? [],
@@ -275,22 +266,26 @@ export async function loadFromFile(options: { portable?: boolean } = {}): Promis
       input.hidden = true;
       input.setAttribute('aria-label', 'Import scene JSON file');
       document.body.appendChild(input);
-      type Outcome = { ok: true; document: Document; path: string } | { ok: false; error: string };
-      const finish = (outcome: Outcome): void => {
+      let settled = false;
+      const finish = (result: Awaited<ReturnType<typeof loadFromFile>>): void => {
+        if (settled) return;
+        settled = true;
+        input.onchange = null;
+        input.oncancel = null;
         input.remove();
-        resolve(outcome);
+        resolve(result);
       };
-      input.addEventListener('cancel', () => finish({ ok: false, error: 'Open cancelled' }), { once: true });
+      input.oncancel = () => finish({ ok: false, error: 'Open cancelled' });
 
       input.onchange = async () => {
         const file = input.files?.[0];
         if (!file) {
-          finish({ ok: false, error: 'No file selected' });
+          finish({ ok: false, error: 'Open cancelled' });
           return;
         }
-
         try {
           const json = await file.text();
+          if (settled) return;
           const result = deserialize(json);
           if (result.ok) {
             log.info('Document loaded', { name: file.name });

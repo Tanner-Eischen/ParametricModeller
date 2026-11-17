@@ -1,5 +1,9 @@
 # App.ts Modularity Summary
 
+## November 2026 integration update
+
+The original extraction below left `WoodworkingController` unused by App. The November audit fix connects it to live callbacks for exact historical bodies and instance lineage, removes the duplicated resolver from App, and tests placement/circular/mirror orientation inheritance. `DocumentLifecycle` now owns save revision identity and guarded document transitions. See [audit fixes](audit_fixes_2026_11_16.md) for current verification; counts below describe the earlier extraction.
+
 ## Completed: Phase 1 (Woodworking Metadata)
 
 **New file:** `src/app/WoodworkingController.ts` (~147 lines)

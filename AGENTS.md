@@ -47,8 +47,16 @@ src/
 See [plans/README_INDEX.md](plans/README_INDEX.md) for all milestones.
 
 ## Current Milestone
-**Milestone 07:** Vertex-level Editing (Guarded) ✅ COMPLETE
-See [plans/milestone_07.md](plans/milestone_07.md) for details.
+The implementation extends through references, woodworking outputs, recovery, and web packaging. Current reliability work is tracked in [the November audit fixes](plans/audit_fixes_2026_11_16.md); [the audit](plans/audit_2026_11_16.md) records the pre-fix evidence.
+
+- Hole and curved Fillet are intentionally disabled and fail closed; the geometry contract remains planar/prismatic.
+- Circular Pattern uses exact sources, deterministic occurrence IDs, and preview/commit/cancel.
+- Model exports use millimeters. STL and 3MF are triangulated output; STEP preserves planar B-Rep faces. Triangles remain a derived output, never model truth.
+- Document replacement must pass the shared lifecycle guard. Save completion belongs to the captured document/revision. Validate incoming document structure before mutating current state.
+- Component reconstruction must respect per-feature body consumption. Manufacturing orientation must follow the same historical transform as geometry.
+- Run local lint, build, and unit coverage for these changes. Browser tests require explicit authorization under the session's no-browser rule.
+
+The milestone descriptions and test counts below are historical checkpoints, not current test totals.
 
 ---
 

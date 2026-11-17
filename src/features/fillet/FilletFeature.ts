@@ -1,16 +1,12 @@
 /**
- * Fillet Feature - Creates constant-radius fillets on convex edges.
- * Per the project constraint (planar/prismatic only), v1 fillets are:
- * - Edge-only (body edges only, not sketch edges)
- * - Constant radius
- * - Inserts new planar faces tangent to the original faces
+ * Persisted fillet feature schema. Curved fillet geometry is unsupported by the
+ * planar kernel; retain the handler to report this explicitly on load/rebuild.
  */
 
 import { error, type Diagnostic } from '../Diagnostics';
 import type { FeatureRecord } from '../FeatureRecord';
 import type { RebuildContext } from '../RebuildContext';
 import type { RebuildHandlerResult } from '../RebuildEngine';
-import { getBodyByFeature } from '../RebuildContext';
 import { generateId } from '../../core/id';
 
 /**
@@ -79,52 +75,17 @@ export function createFilletFeature(params: Partial<FilletParams>): FeatureRecor
 }
 
 /**
- * Rebuild fillet feature.
- * For v1, this is a placeholder that returns the original body unchanged.
- * Real fillet geometry would require:
- * 1. Identifying the edges to fillet
- * 2. Computing offset faces tangent to adjacent faces
- * 3. Creating new planar faces at the fillet radius
- * 4. Updating topology accordingly
+ * Fail closed instead of reporting an unchanged, duplicated body as a fillet.
  */
 export function rebuildFillet(
   feature: FeatureRecord,
-  context: RebuildContext,
+  _context: RebuildContext,
 ): RebuildHandlerResult {
-  const params = feature.parameters as unknown as FilletParams;
-  const { sourceFeatureId, edgeIds, radius } = params;
-
-  // Validate required params
-  if (!sourceFeatureId || !edgeIds || edgeIds.length === 0 || radius <= 0) {
-    return {
-      ok: false,
-      error: 'Invalid fillet parameters',
-      diagnostics: validateFilletParams(params),
-    };
-  }
-
-  // Get source body
-  const sourceBody = getBodyByFeature(context, sourceFeatureId);
-  if (!sourceBody) {
-    return {
-      ok: false,
-      error: `Source feature ${sourceFeatureId} not found`,
-      diagnostics: [error('SOURCE_NOT_FOUND', `Source feature ${sourceFeatureId} not found`)],
-    };
-  }
-
-  // v1: Return the original body unchanged
-  // A full implementation would:
-  // 1. For each edge to fillet, find adjacent faces
-  // 2. Compute the offset distance based on radius and face angle
-  // 3. Create new planar faces tangent to the original faces
-  // 4. Update edge/vertex topology to close the gaps
-
+  const message = 'Fillet geometry is unsupported by the planar kernel. Suppress or remove this feature to rebuild.';
   return {
-    ok: true,
-    bodies: [sourceBody],
-    diagnostics: [],
-    outputs: [],
+    ok: false,
+    error: message,
+    diagnostics: [error('UNSUPPORTED_FILLET', message, feature.id)],
   };
 }
 

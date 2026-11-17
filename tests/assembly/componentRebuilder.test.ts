@@ -12,12 +12,17 @@ import {
   addVertex,
   createBody,
   createTopologyIdAllocator,
+  measureBody,
   type Body,
 } from '../../src/geometry';
 import { createEdge } from '../../src/geometry/Edge';
 import { createFace } from '../../src/geometry/Face';
 import { createPlane } from '../../src/geometry/Plane';
 import { createVertex } from '../../src/geometry/Vertex';
+import { createBoxFeature, rebuildBox } from '../../src/features/primitives/BoxFeature';
+import { createRebuildEngine } from '../../src/features/RebuildEngine';
+import { createJoinBodiesFeature, rebuildJoinBodies } from '../../src/features/transform/JoinBodiesFeature';
+import { createComponent, createComponentInstance } from '../../src/assembly/AssemblyTypes';
 
 const IDENTITY = [
   1, 0, 0, 0,
@@ -65,6 +70,71 @@ function allTopologyIds(body: Body): Set<string> {
 }
 
 describe('ComponentRebuilder deterministic instance topology', () => {
+  function rebuildCompound() {
+    const a = createBoxFeature({ width: 2, depth: 3, height: 1, origin: [0, 0, 0] });
+    const b = createBoxFeature({ width: 2, depth: 3, height: 1, origin: [5, 0, 0] });
+    const engine = createRebuildEngine();
+    engine.registerHandler('box', rebuildBox);
+    engine.registerHandler('joinBodies', rebuildJoinBodies);
+    const primitives = engine.rebuild([a, b]);
+    if (!primitives.ok) throw new Error(primitives.error);
+    const bodyA = primitives.bodiesByFeature.get(a.id)![0]!;
+    const bodyB = primitives.bodiesByFeature.get(b.id)![0]!;
+    const join = createJoinBodiesFeature([
+      { featureId: a.id, bodyId: bodyA.id },
+      { featureId: b.id, bodyId: bodyB.id },
+    ]);
+    const base = engine.rebuild([a, b, join]);
+    if (!base.ok) throw new Error(base.error);
+    return { a, b, join, bodyA, bodyB, base };
+  }
+
+  it('does not resurrect consumed inputs when instancing a compound feature history', () => {
+    const { a, b, join, bodyA, base } = rebuildCompound();
+    expect(base.bodies).toHaveLength(1);
+    const component = createComponent('Joined stock', [a.id, b.id, join.id]);
+    const instance = createComponentInstance(component.id, 'Joined instance');
+    const result = rebuildWithComponents(base, [component], [instance]);
+    expect(result.ok).toBe(true);
+    expect(result.componentSourceBodyIds.get(component.id)).toEqual([bodyA.id]);
+    expect(result.instanceBodies.get(instance.id)).toHaveLength(1);
+    expect(result.bodies).toHaveLength(1);
+    expect(measureBody(result.bodies[0]!).volume).toBeCloseTo(12, 8);
+  });
+
+  it('uses rebuild order instead of the persisted component feature list order', () => {
+    const { a, b, join, base } = rebuildCompound();
+    const component = createComponent('Joined stock', [a.id, b.id, join.id]);
+    const instance = createComponentInstance(component.id, 'Joined instance');
+    const ordered = rebuildWithComponents(base, [component], [instance]);
+    const reordered = rebuildWithComponents(base, [{ ...component, featureIds: [join.id, b.id, a.id] }], [instance]);
+    expect(ordered.ok).toBe(true);
+    expect(reordered.ok).toBe(true);
+    expect(reordered.bodies.map(serializeTopology)).toEqual(ordered.bodies.map(serializeTopology));
+  });
+
+  it('retains an explicitly selected historical body when its consumer is outside the component', () => {
+    const { b, bodyB, base } = rebuildCompound();
+    const component = createComponent('Historical B', [b.id]);
+    const instance = createComponentInstance(component.id, 'B instance');
+    const result = rebuildWithComponents(base, [component], [instance]);
+    expect(result.ok).toBe(true);
+    expect(result.componentSourceBodyIds.get(component.id)).toEqual([bodyB.id]);
+    expect(result.instanceBodies.get(instance.id)).toHaveLength(1);
+    expect(measureBody(result.instanceBodies.get(instance.id)![0]!).volume).toBeCloseTo(6, 8);
+    expect(result.bodies).toHaveLength(2); // Current compound plus explicitly selected old B.
+  });
+
+  it('rejects stale explicit ownership of an input consumed inside the component', () => {
+    const { a, b, join, bodyB, base } = rebuildCompound();
+    const component = createComponent('Joined stock', [a.id, b.id, join.id]);
+    const instance = createComponentInstance(component.id, 'Joined instance');
+    const result = rebuildWithComponents(base, [component], [instance], new Map([[component.id, [bodyB.id]]]));
+    expect(result.ok).toBe(false);
+    expect(result.bodies).toEqual([]);
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'SOURCE_BODY_NOT_FOUND' }));
+  });
+
   it('produces byte-identical geometry and topology IDs across ten rebuilds', () => {
     const source = createSourceBody('source:body');
     const transform = [...IDENTITY];

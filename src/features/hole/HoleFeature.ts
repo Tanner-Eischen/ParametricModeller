@@ -1,6 +1,6 @@
 /**
- * Hole feature: creates drilled, counterbored, or countersunk holes.
- * Uses extrude-cut with a circular profile for simplicity.
+ * Persisted hole feature schema. Curved hole geometry is unsupported by the
+ * planar kernel; retain the handler to report this explicitly on load/rebuild.
  */
 
 import {
@@ -65,23 +65,21 @@ export function createHoleFeature(params: HoleParams): FeatureRecord {
     type: HOLE_FEATURE_TYPE,
     name: 'Hole',
     parameters: params as unknown as Record<string, unknown>,
-    refsIn: params.bodyRef?.bodyId ? [params.bodyRef.bodyId] : [],
+    refsIn: params.bodyRef?.featureId ? [params.bodyRef.featureId] : [],
     refsOut: [],
     suppressed: false,
   };
 }
 
 export function rebuildHole(
-  _feature: FeatureRecord,
+  feature: FeatureRecord,
   _context: RebuildContext,
 ): RebuildHandlerResult {
-  // Hole is a visual-only feature - it doesn't create new geometry
-  // The actual hole is rendered in the viewport or in shop drawings
+  const message = 'Hole geometry is unsupported by the planar kernel. Suppress or remove this feature to rebuild.';
   return {
-    ok: true,
-    bodies: [],
-    diagnostics: [],
-    outputs: [],
+    ok: false,
+    error: message,
+    diagnostics: [error('UNSUPPORTED_HOLE', message, feature.id)],
   };
 }
 

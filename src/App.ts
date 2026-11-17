@@ -100,6 +100,7 @@ import {
   type WorkspacePreferences,
 } from './ui/WorkspacePreferencesStore';
 import { DocumentManager, saveToFile, loadFromFile, AutosaveManager, RecentFilesStore, type RecentFileEntry } from './persistence';
+import { validateDocumentStructure } from './persistence/DocumentValidation';
 import type { Document, Body, BodyPresentation, BodyWoodworkingMetadata, ShopDrawingDefinition } from './types';
 import type { Body as BRepBody } from './geometry';
 import { DEFAULT_TOLERANCE_POLICY, checkPlanarityPreservation, getBodyBoundingBox, getConstructionPlaneFromRef, getFaceVertexIds, getOrderedLoopVertices, createVertexRef, offsetFace, type EdgeRef, type SubObjectType, type VertexRef } from './geometry';
@@ -175,8 +176,8 @@ import {
   createComponent,
   createComponentInstance,
   CREATE_COMPONENT_FEATURE_TYPE,
-  rebuildWithComponents,
-  solveConstraints,
+  rebuildAssembly,
+  type ConstraintRuntimeStatus,
 } from './assembly';
 import { BOX_FEATURE_TYPE, type BoxParams } from './features/primitives';
 import {
@@ -208,10 +209,14 @@ import {
   type CircularPatternParams,
 } from './features/pattern';
 import { MOVE_VERTEX_FEATURE_TYPE } from './features/vertex';
-import { HOLE_FEATURE_TYPE, rebuildHole, createHoleFeature, type HoleParams } from './features/hole';
-import { FILLET_FEATURE_TYPE, rebuildFillet, createFilletFeature, type FilletParams } from './features/fillet';
+import { HOLE_FEATURE_TYPE, rebuildHole } from './features/hole';
+import { FILLET_FEATURE_TYPE, rebuildFillet } from './features/fillet';
 import { ROTATE_BODY_FEATURE_TYPE, JOIN_BODIES_FEATURE_TYPE } from './features/transform';
 import { PanelChrome } from './app/PanelChrome';
+import { DocumentLifecycle } from './app/DocumentLifecycle';
+import { WoodworkingController } from './app/WoodworkingController';
+import { createModelExport, type ModelExportFormat } from './app/ModelExport';
+import { chooseDocumentDisposition } from './ui/DocumentTransitionDialog';
 import { GizmoManager } from './app/GizmoManager';
 import { BODY_BOOLEAN_FEATURE_TYPE, createBodyBooleanFeature } from './features/boolean';
 import { TRANSFORM_BODIES_FEATURE_TYPE } from './features/placement';
@@ -377,6 +382,23 @@ export class App {
   private sceneObjects: Map<string, THREE.Object3D> = new Map();
   private meshCache: RenderMeshCache;
   private bodyPresentations = new Map<string, BodyPresentation>();
+  private woodworkingController = new WoodworkingController({
+    getDocument: () => this.documentManager.getDocument(),
+    getFeatureByBodyId: (id) => this.getFeatureByBodyId(id),
+    getFeatureById: (id) => this.getFeatureById(id),
+    getInstanceForBody: (id) => this.getInstanceForBody(id),
+    getInstanceSourceId: (id) => this.instanceBodySourceIds.get(id),
+    getInstanceSourceFeatureId: (bodyId) => {
+      const instance = this.getInstanceForBody(bodyId);
+      const component = this.components.find((candidate) => candidate.id === instance?.componentId);
+      const sourceId = this.instanceBodySourceIds.get(bodyId);
+      return component ? [...this.rebuiltBodiesByFeature.keys()].reverse().find((id) =>
+        component.featureIds.includes(id) && this.rebuiltBodiesByFeature.get(id)?.some((body) => body.id === sourceId)
+      ) : undefined;
+    },
+    getBodiesByFeature: () => this.rebuiltBodiesByFeature,
+    getRebuiltBodies: () => this.rebuiltBodies,
+  });
   private grainDirectionOverlay = new GrainDirectionOverlay();
 
   // Feature system
@@ -385,6 +407,40 @@ export class App {
   private undoRedo = createUndoRedoStack<AppHistorySnapshot>({ capacity: 150 });
   private autosaveManager = new AutosaveManager();
   private recentFilesStore = new RecentFilesStore();
+  private documentLifecycle = new DocumentLifecycle({
+    capture: () => ({
+      // Preview features are transient; only committed work belongs in a save.
+      document: this.undoRedo.getPresent()?.document ?? this.buildDocumentSnapshot(),
+      revision: this.undoRedo.getState().current?.id ?? null,
+    }),
+    isDirty: () => this.undoRedo.isDirty(),
+    write: (snapshot) => saveToFile(snapshot, `${snapshot.metadata.name}.json`),
+    onSaved: ({ document: snapshot, revision }, path) => {
+      this.documentManager.setFilePath(path);
+      this.recentFilesStore.add(path, snapshot.metadata.name);
+      this.undoRedo.markClean(revision);
+      if (this.undoRedo.isDirty()) {
+        const current = this.undoRedo.getPresent()?.document;
+        if (current) this.autosaveManager.schedule(current, { filePath: path, reason: 'edits-during-save' });
+      } else {
+        this.autosaveManager.saveNow(snapshot, { filePath: path, reason: 'manual-save' });
+      }
+      this.refreshDocumentDirtyState();
+      this.refreshUiChrome();
+      eventBus.emit('document:save', { path });
+      eventBus.emit('ui:status', {
+        message: this.undoRedo.isDirty() ? `Saved: ${path}. Newer changes remain unsaved.` : `Saved: ${path}`,
+      });
+    },
+    preserveRecovery: (snapshot) => {
+      this.autosaveManager.schedule(snapshot, {
+        filePath: this.documentManager.currentFilePath, reason: 'before-document-replacement',
+      });
+      return this.autosaveManager.flushPending()!;
+    },
+    chooseDisposition: chooseDocumentDisposition,
+    status: (message) => eventBus.emit('ui:status', { message }),
+  });
   private featureTreePanel: FeatureTreePanel;
   private portfolioFramePanel: PortfolioFramePanel;
   private portableImportPending = false;
@@ -515,6 +571,7 @@ export class App {
   private instanceBodyIdsByInstance = new Map<string, string[]>();
   private instanceBodySourceIds = new Map<string, string>();
   private constraints: MateConstraint[] = [];
+  private assemblyConstraintStatuses = new Map<string, ConstraintRuntimeStatus>();
   private activeComponentId: string | null = null;
   private assemblyPanel: AssemblyPanel | null = null;
   private constraintCreationController: ConstraintCreationController | null = null;
@@ -529,8 +586,9 @@ export class App {
   };
   private unsubscribeToolSessionEnd: (() => void) | null = null;
   private constraintVisualization: ConstraintVisualization | null = null;
-  private handleBeforeUnload = (): void => {
+  private handleBeforeUnload = (event: BeforeUnloadEvent): void => {
     this.autosaveManager.flushPending();
+    this.documentLifecycle.beforeUnload(event);
   };
 
   constructor(container: HTMLElement) {
@@ -1186,13 +1244,13 @@ export class App {
 
   private createCommandActions(): CommandToolbarAction[] {
     return [
-      { id: 'loadFrameExample', onTrigger: () => this.loadFrameExample(),
+      { id: 'loadFrameExample', onTrigger: () => void this.loadFrameExample(),
         isDisabled: () => this.toolSessions.activeSession !== null },
       { id: 'importSceneJson', onTrigger: () => void this.openDocument(true),
         isDisabled: () => this.portableImportPending || this.toolSessions.activeSession !== null },
       { id: 'downloadSceneJson', onTrigger: () => void this.downloadSceneJson(),
         isDisabled: () => this.toolSessions.activeSession !== null },
-      { id: 'newDocument', onTrigger: () => this.newDocument() },
+      { id: 'newDocument', onTrigger: () => void this.newDocument() },
       { id: 'openDocument', onTrigger: () => void this.openDocument() },
       {
         id: 'saveDocument',
@@ -1236,13 +1294,15 @@ export class App {
       },
       {
         id: 'addHole',
-        onTrigger: () => this.addHoleFeature(),
-        isDisabled: () => this.sketchModeController.isActive || this.toolSessions.activeSession !== null,
+        onTrigger: () => eventBus.emit('ui:status', { message: 'Drilled holes are not supported by the planar geometry kernel.' }),
+        isDisabled: () => true,
+        getAvailability: () => ({ enabled: false, reason: 'Drilled holes are not supported by the planar geometry kernel.' }),
       },
       {
         id: 'addFillet',
-        onTrigger: () => this.addFilletFeature(),
-        isDisabled: () => this.sketchModeController.isActive || this.toolSessions.activeSession !== null || this.rebuiltBodies.length === 0,
+        onTrigger: () => eventBus.emit('ui:status', { message: 'Curved fillets are not supported. Use the planar chamfer joint for an edge bevel.' }),
+        isDisabled: () => true,
+        getAvailability: () => ({ enabled: false, reason: 'Curved fillets are not supported. Use the planar chamfer joint for an edge bevel.' }),
       },
       {
         id: 'addWoodJoint',
@@ -1283,6 +1343,7 @@ export class App {
       {
         id: 'addCircularPattern',
         onTrigger: () => this.addCircularPatternFeature(),
+        isActive: () => this.toolSessions.activeSession?.kind === 'circular-pattern',
         isDisabled: () => this.sketchModeController.isActive || this.getExplicitBodyTarget() === null,
       },
       {
@@ -1419,6 +1480,15 @@ export class App {
         onTrigger: () => void this.exportShopDrawing('svg'),
         isDisabled: () => this.rebuiltBodies.length === 0,
       },
+      ...(['stl', 'step', '3mf'] as const).map((format): CommandToolbarAction => ({
+        id: format === 'stl' ? 'exportSTL' : format === 'step' ? 'exportSTEP' : 'exportMF3',
+        onTrigger: () => void this.exportModel(format),
+        isDisabled: () => this.toolSessions.activeSession !== null || !this.rebuiltBodies.some((body) => this.isBodyVisible(body.id)),
+        getAvailability: () => ({
+          enabled: this.toolSessions.activeSession === null && this.rebuiltBodies.some((body) => this.isBodyVisible(body.id)),
+          reason: 'Finish the active tool and show at least one valid solid to export.',
+        }),
+      })),
       {
         id: 'openCommandPalette',
         onTrigger: () => this.commandPalette.toggle(),
@@ -1436,6 +1506,7 @@ export class App {
     enabled: boolean;
     reason?: string;
   } {
+    if (action.getAvailability) return action.getAvailability();
     const enabled = !(action.isDisabled?.() ?? false);
     if (enabled) return { enabled: true };
     const reasons: Partial<Record<CommandToolbarAction['id'], string>> = {
@@ -1951,123 +2022,9 @@ export class App {
   private resolveWoodworkingMetadata(
     bodyId: string,
     featureId = this.getFeatureByBodyId(bodyId)?.id,
-    visited = new Set<string>()
   ): BodyWoodworkingMetadata | null {
-    const visitKey = `${featureId ?? 'instance'}:${bodyId}`;
-    if (visited.has(visitKey)) return null;
-    visited.add(visitKey);
-    const direct = this.documentManager.getDocument().bodyMetadata?.[bodyId];
-    const instance = this.getInstanceForBody(bodyId);
-    const instanceSourceId = instance ? this.instanceBodySourceIds.get(bodyId) : undefined;
-    const instanceSourceOwner = instanceSourceId ? this.getFeatureByBodyId(instanceSourceId)?.id : undefined;
-    if (direct && (!direct.sourceFeatureId || direct.sourceFeatureId === featureId
-      || (instanceSourceOwner !== undefined && direct.sourceFeatureId === instanceSourceOwner))) {
-      // Exact instance metadata is authored in world axes already. Prefer its
-      // part identity and axes instead of reapplying the source transform.
-      return cloneSnapshot(direct);
-    }
-
-    if (instance) {
-      const sourceId = this.instanceBodySourceIds.get(bodyId);
-      if (sourceId) {
-        const inherited = this.resolveWoodworkingMetadata(sourceId, this.getFeatureByBodyId(sourceId)?.id, visited);
-        return inherited ? this.transformWoodworkingAxes(inherited, new THREE.Matrix4().fromArray(instance.transform)) : null;
-      }
-    }
-
-    const feature = featureId ? this.getFeatureById(featureId) : this.getFeatureByBodyId(bodyId);
-    if (!feature) return direct ? cloneSnapshot(direct) : null;
-    const parameters = feature.parameters as {
-      sourceBodyRef?: { featureId?: string; bodyId?: string };
-      bodyRef?: { featureId?: string; bodyId?: string };
-      targetBodyRef?: { featureId?: string; bodyId?: string };
-      bodyRefs?: Array<{ featureId?: string; bodyId?: string }>;
-      toolBodyRefs?: Array<{ featureId?: string; bodyId?: string }>;
-      members?: Array<{ bodyRef?: { featureId?: string; bodyId?: string } }>;
-      sourceFeatureId?: string;
-      rotationDegrees?: [number, number, number];
-      planeRef?: PlaneRef;
-    };
-    const candidateRefs = [
-      parameters.sourceBodyRef,
-      parameters.bodyRef,
-      ...(parameters.members?.map((member) => member.bodyRef) ?? []),
-      ...(parameters.bodyRefs ?? []),
-    ].filter((reference): reference is { featureId?: string; bodyId?: string } =>
-      reference !== undefined
-    );
-    let sourceRef = candidateRefs.find((reference) => reference.bodyId === bodyId);
-    if (!sourceRef && feature.type === TRANSFORM_BODIES_FEATURE_TYPE) {
-      const outputIndex = feature.refsOut.indexOf(bodyId);
-      sourceRef = outputIndex >= 0 ? parameters.bodyRefs?.[outputIndex] : undefined;
-    }
-    if (
-      !sourceRef
-      && (
-        feature.type === BODY_BOOLEAN_FEATURE_TYPE
-        || feature.type === WOOD_JOINT_FEATURE_TYPE
-        || feature.type === JOIN_BODIES_FEATURE_TYPE
-      )
-    ) {
-      // Boolean primary/split results and joint members inherit the target
-      // member's manufacturing identity; tool metadata is never substituted.
-      sourceRef = parameters.targetBodyRef
-        ?? candidateRefs[0];
-    }
-    // Legacy Move/Copy and other single-source features produce a new body ID,
-    // so the output cannot match the persisted source reference by ID. Inherit
-    // manufacturing identity from the explicitly authored source instead.
-    sourceRef ??= parameters.sourceBodyRef;
-    sourceRef ??= parameters.targetBodyRef;
-    const sourceFeatureId = sourceRef?.featureId ?? parameters.sourceFeatureId;
-    const sourceBodyId = sourceRef?.bodyId ?? (sourceFeatureId
-      ? this.getFeatureById(sourceFeatureId)?.refsOut.find((id) => this.rebuiltBodies.some((body) => body.id === id))
-      : undefined);
-    if (!sourceBodyId) return direct ? cloneSnapshot(direct) : null;
-    const inherited = this.resolveWoodworkingMetadata(sourceBodyId, sourceFeatureId, visited);
-    if (!inherited) return null;
-
-    if (feature.type === ROTATE_BODY_FEATURE_TYPE && parameters.rotationDegrees) {
-      const [x, y, z] = parameters.rotationDegrees.map(THREE.MathUtils.degToRad) as [number, number, number];
-      return this.transformWoodworkingAxes(
-        inherited,
-        new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(x, y, z, 'XYZ'))
-      );
-    }
-    if (feature.type === MIRROR_FEATURE_TYPE && parameters.planeRef) {
-      const plane = getConstructionPlaneFromRef(parameters.planeRef, this.rebuiltBodies);
-      if (plane) {
-        const normal = new THREE.Vector3(...plane.normal).normalize();
-        const reflect = (axis: readonly [number, number, number]): [number, number, number] => {
-          const vector = new THREE.Vector3(...axis);
-          vector.addScaledVector(normal, -2 * vector.dot(normal)).normalize();
-          return [vector.x, vector.y, vector.z];
-        };
-        return {
-          ...inherited,
-          grainAxis: reflect(inherited.grainAxis),
-          thicknessAxis: reflect(inherited.thicknessAxis),
-        };
-      }
-    }
-    return inherited;
+    return this.woodworkingController.resolveWoodworkingMetadata(bodyId, featureId);
   }
-
-  private transformWoodworkingAxes(
-    metadata: BodyWoodworkingMetadata,
-    matrix: THREE.Matrix4
-  ): BodyWoodworkingMetadata {
-    const transform = (axis: readonly [number, number, number]): [number, number, number] => {
-      const direction = new THREE.Vector3(...axis).transformDirection(matrix).normalize();
-      return [direction.x, direction.y, direction.z];
-    };
-    return {
-      ...metadata,
-      grainAxis: transform(metadata.grainAxis),
-      thicknessAxis: transform(metadata.thicknessAxis),
-    };
-  }
-
   private getCutListParts(): Array<{ body: BRepBody; metadata: BoardMetadata; name: string }> {
     return this.rebuiltBodies.flatMap((body) => {
       const metadata = this.resolveWoodworkingMetadata(body.id);
@@ -2230,14 +2187,41 @@ export class App {
     return definition;
   }
 
+  private async exportModel(format: ModelExportFormat): Promise<void> {
+    if (this.toolSessions.activeSession) {
+      eventBus.emit('ui:status', { message: 'Finish or cancel the active tool before exporting.' });
+      return;
+    }
+    try {
+      // Rebuild locally to reject failed histories instead of exporting a stale preview.
+      const geometry = this.rebuildEngine.rebuild(this.features);
+      const assembly = rebuildAssembly(geometry, this.components, this.componentInstances, this.constraints);
+      if (!assembly.ok) throw new Error(assembly.error ?? 'The model could not be rebuilt.');
+      const bodies = assembly.bodies.filter((body) => this.isBodyVisible(body.id));
+      const file = await createModelExport(format, bodies, this.documentManager.getDocument().metadata.name);
+      const data = typeof file.data === 'string' ? file.data : new Uint8Array(file.data).buffer;
+      const url = URL.createObjectURL(new Blob([data], { type: file.mimeType }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file.filename;
+      try { link.click(); } finally { URL.revokeObjectURL(url); }
+      eventBus.emit('ui:status', { message: `Exported ${file.filename} in millimeters.` });
+    } catch (caught) {
+      eventBus.emit('ui:status', { message: `Export blocked: ${caught instanceof Error ? caught.message : String(caught)}` });
+    }
+  }
+
   private exportCutList(): void {
     try {
+      this.refreshManufacturingExport();
       const parts = this.getCutListParts();
       if (parts.length === 0) {
         eventBus.emit('ui:status', { message: 'Tag at least one body for the cut list first' });
         return;
       }
       const title = this.documentManager.getDocument().metadata.name;
+      const revision = this.undoRedo.getState().current?.id ?? null;
+      const epoch = this.documentLifecycle.documentEpoch;
       const cutList = buildCutListDocument(parts, { title, unit: this.getWoodworkingUnit() });
       const operations = this.collectManufacturingOperations();
       const partNumbers = new Map(parts.flatMap(({ body, metadata }) =>
@@ -2251,7 +2235,7 @@ export class App {
         document: cutList,
         operations,
         partNumbersByBodyId: partNumbers,
-        onExport: (model) => this.exportCutListPreview(cutList, model),
+        onExport: (model) => this.exportCutListPreview(cutList, model, { revision, epoch }),
         onClose: () => {
           this.cutListPreviewPanel?.dispose();
           this.cutListPreviewPanel = null;
@@ -2267,8 +2251,27 @@ export class App {
     }
   }
 
-  private exportCutListPreview(document: CutListDocument, model: CutListPreviewModel): void {
+  private refreshManufacturingExport(): void {
+    if (this.toolSessions.activeSession) throw new Error('Finish or cancel the active tool before exporting.');
+    const result = this.rebuildAll('Validate manufacturing output', { trackHistory: false });
+    if (!result.ok) throw new Error(result.diagnostics[0]?.message ?? 'The model could not be rebuilt.');
+  }
+
+  private exportCutListPreview(
+    document: CutListDocument,
+    model: CutListPreviewModel,
+    expected: { revision: number | null; epoch: number },
+  ): void {
     if (!model.canExport) return;
+    try {
+      if (expected.epoch !== this.documentLifecycle.documentEpoch || expected.revision !== (this.undoRedo.getState().current?.id ?? null)) {
+        throw new Error('The model changed. Reopen the cut list to review the current dimensions.');
+      }
+      this.refreshManufacturingExport();
+    } catch (caught) {
+      eventBus.emit('ui:status', { message: `Cut-list export blocked: ${caught instanceof Error ? caught.message : String(caught)}` });
+      return;
+    }
     const rows = document.rows.map((row) => {
       const preview = model.rows.find((candidate) => candidate.key === row.key);
       return preview ? {
@@ -2323,6 +2326,7 @@ export class App {
 
   private async exportShopDrawing(format: 'svg' | 'pdf' | 'dxf'): Promise<void> {
     try {
+      this.refreshManufacturingExport();
       const document = this.documentManager.getDocument();
       const currentDefinition = this.ensureDrawingDefinition(document);
       const validationContext = {
@@ -2656,15 +2660,12 @@ export class App {
   }
 
   private getWoodworkingUnit(): 'in' | 'mm' {
-    return this.documentManager.getDocument().config.units === 'mm' ? 'mm' : 'in';
+    return this.woodworkingController.getUnit();
   }
 
   /** Format the inch-based model value in the active document unit for editable HUD fields. */
   private formatLengthInput(valueInches: number): string {
-    const displayed = this.getWoodworkingUnit() === 'mm'
-      ? valueInches * 25.4
-      : valueInches;
-    return String(Number(displayed.toFixed(6)));
+    return this.woodworkingController.formatLengthInput(valueInches);
   }
 
   private createMaterialId(material: string): string {
@@ -3044,6 +3045,19 @@ export class App {
     if (feature.type === SKETCH_FEATURE_TYPE) {
       return [];
     }
+    if (feature.type === CIRCULAR_PATTERN_FEATURE_TYPE) {
+      const params = feature.parameters as unknown as CircularPatternParams;
+      return [
+        { id: 'feature-count', label: 'Occurrences (including source)', type: editable ? 'number' : 'readonly', value: params.count, min: 2, max: 1000, step: 1 },
+        { id: 'feature-angle', label: 'Total angle', type: editable ? 'number' : 'readonly', value: params.angle, unit: '°', min: -360, max: 360 },
+        { id: 'feature-axis', label: 'Rotation axis', type: editable ? 'select' : 'readonly', value: params.axis, options: ['X', 'Y', 'Z'].map((axis) => ({ value: axis, label: axis })) },
+        ...params.center.map((coordinate, index): ContextTaskFieldDescriptor => ({
+          id: `feature-center-${index}`, label: `Center ${['X', 'Y', 'Z'][index]}`,
+          type: editable ? 'text' : 'readonly', value: this.formatLengthInput(coordinate), unit: this.getWoodworkingUnit(),
+        })),
+        { id: 'feature-symmetric', label: 'Symmetric', type: editable ? 'checkbox' : 'readonly', value: params.symmetric },
+      ];
+    }
     if (feature.type === EXTRUDE_FEATURE_TYPE || feature.type === EXTRUDE_CUT_FEATURE_TYPE) {
       const params: NormalizedExtrudeParams | NormalizedExtrudeCutParams =
         feature.type === EXTRUDE_FEATURE_TYPE
@@ -3409,7 +3423,21 @@ export class App {
       }
       parameters.extent = extent;
     }
-    if (feature.type === MITER_CUT_FEATURE_TYPE && parameterId === 'inset') {
+    if (feature.type === CIRCULAR_PATTERN_FEATURE_TYPE && parameterId.startsWith('center-')) {
+      const parsed = parseNumericInput(String(value ?? ''), { defaultUnit: this.getWoodworkingUnit() });
+      if (!parsed.ok) {
+        this.featurePreviewInvalidFieldIds.add(fieldId);
+        this.featurePreviewParameterUpdateFailed = true;
+        this.contextTaskPanel.setFieldError(fieldId, parsed.error);
+        this.contextTaskPanel.setCommitEnabled(false);
+        return;
+      }
+      const center = [...(parameters.center as [number, number, number])];
+      center[Number(parameterId.slice('center-'.length))] = parsed.value;
+      parameters.center = center;
+    } else if (feature.type === CIRCULAR_PATTERN_FEATURE_TYPE && (parameterId === 'angle' || parameterId === 'count')) {
+      parameters[parameterId] = value === '' ? Number.NaN : Number(value);
+    } else if (feature.type === MITER_CUT_FEATURE_TYPE && parameterId === 'inset') {
       const parsed = parseNumericInput(String(value ?? ''), {
         defaultUnit: this.getWoodworkingUnit(),
       });
@@ -5518,7 +5546,7 @@ export class App {
    */
   private beginFeaturePreview(
     feature: FeatureRecord,
-    kind: 'extrude' | 'cut' | 'miter-cut',
+    kind: 'extrude' | 'cut' | 'miter-cut' | 'circular-pattern',
     historyLabel: string
   ): void {
     const sessionId = `${kind}-preview-${++this.featurePreviewSequence}`;
@@ -6192,60 +6220,6 @@ export class App {
     this.beginFeaturePreview(feature, 'extrude', 'Add Extrude');
   }
 
-  /** Add a hole feature. */
-  private addHoleFeature(): void {
-    const bodyId = this.selection.activeId;
-    if (!bodyId) {
-      eventBus.emit('ui:status', { message: 'Select a body to add a hole' });
-      return;
-    }
-
-    const feature = this.getFeatureByBodyId(bodyId);
-    if (!feature) {
-      eventBus.emit('ui:status', { message: 'No feature found for selected body' });
-      return;
-    }
-
-    // Default hole parameters - will be edited in property inspector
-    const holeParams: HoleParams = {
-      bodyRef: { bodyId, featureId: feature.id },
-      position: [0, 0],
-      faceId: '',
-      holeType: 'through',
-      diameter: 0.25,
-    };
-
-    const holeFeature = createHoleFeature(holeParams);
-    this.features.push(holeFeature);
-    eventBus.emit('ui:status', { message: 'Added hole feature - edit parameters in the property inspector' });
-  }
-
-  /** Add a fillet feature. */
-  private addFilletFeature(): void {
-    const bodyId = this.selection.activeId;
-    if (!bodyId) {
-      eventBus.emit('ui:status', { message: 'Select a body to add a fillet' });
-      return;
-    }
-
-    const feature = this.getFeatureByBodyId(bodyId);
-    if (!feature) {
-      eventBus.emit('ui:status', { message: 'No feature found for selected body' });
-      return;
-    }
-
-    // Default fillet parameters - will be edited in property inspector
-    const filletParams: FilletParams = {
-      sourceFeatureId: feature.id,
-      edgeIds: [],
-      radius: 5,
-    };
-
-    const filletFeature = createFilletFeature(filletParams);
-    this.features.push(filletFeature);
-    eventBus.emit('ui:status', { message: 'Added fillet feature - edit parameters in the property inspector' });
-  }
-
   /** Cut an explicitly selected body with an explicitly selected sketch. */
   private addExtrudeCutFeature(): void {
     const sketchFeature = this.getExplicitSketchTarget();
@@ -6358,6 +6332,7 @@ export class App {
 
     const params: CircularPatternParams = {
       sourceFeatureId: target.feature.id,
+      sourceBodyRef: createBodyRef(target.body.id, target.feature.id),
       axis: 'Z',
       center: [0, 0, 0],
       count: 6,
@@ -6366,11 +6341,7 @@ export class App {
     };
 
     const feature = createCircularPatternFeature(params);
-    this.features.push(feature);
-    eventBus.emit('ui:status', {
-      message: `Added ${feature.name} - edit parameters in Properties`,
-    });
-    this.refreshUiChrome();
+    this.beginFeaturePreview(feature, 'circular-pattern', 'Add Circular Pattern');
   }
 
   /** Add a mirror feature from the explicitly selected body. */
@@ -6663,7 +6634,13 @@ export class App {
       this.assemblyPanel.setAssemblyData(
         this.components,
         this.componentInstances,
-        this.constraints
+        this.constraints.map((constraint) => {
+          const status = this.assemblyConstraintStatuses.get(constraint.id);
+          return status ? {
+            ...constraint, satisfied: status.state === 'satisfied', status: status.state,
+            ...(status.message ? { errorMessage: status.message } : {}),
+          } : { ...constraint };
+        })
       );
     }
     // The Assembly section is contextual: it only appears once you've grouped
@@ -6786,57 +6763,22 @@ export class App {
    */
   private handleConstraintCreated = (constraint: MateConstraint): boolean => {
     const previousInstances = cloneSnapshot(this.componentInstances);
+    const previousConstraints = cloneSnapshot(this.constraints);
     this.constraints.push(constraint);
-    const instanceBodies = new Map(
-      this.componentInstances.map((instance) => [
-        instance.id,
-        (this.instanceBodyIdsByInstance.get(instance.id) ?? [])
-          .map((bodyId) => this.rebuiltBodies.find((body) => body.id === bodyId))
-          .filter((body): body is BRepBody => Boolean(body)),
-      ])
-    );
-    const solved = solveConstraints({
-      instances: this.componentInstances,
-      constraints: this.constraints,
-      instanceBodies,
-      tolerance: DEFAULT_TOLERANCE_POLICY.linear,
-    });
-    if (!solved.ok || !solved.committed) {
-      this.constraints = this.constraints.filter((candidate) => candidate.id !== constraint.id);
-      const reason = solved.errors.get(constraint.id) ?? 'The selected mate is conflicting or broken.';
-      eventBus.emit('ui:status', { message: `Constraint blocked: ${reason}` });
-      this.updateAssemblyPanel();
-      return false;
-    }
-
-    this.componentInstances = this.componentInstances.map((instance) =>
-      solved.updatedInstances.get(instance.id) ?? instance
-    );
-    for (const candidate of this.constraints) {
-      const runtime = solved.constraintStatuses.get(candidate.id);
-      if (!runtime) continue;
-      candidate.satisfied = runtime.state === 'satisfied';
-      candidate.status = runtime.state;
-      if (runtime.message) candidate.errorMessage = runtime.message;
-      else delete candidate.errorMessage;
-      eventBus.emit('constraint:solved', {
-        constraintId: candidate.id,
-        satisfied: candidate.satisfied,
-      });
-    }
-
     const rebuild = this.rebuildAll('Solve Constraint', { trackHistory: false });
     if (!rebuild.ok) {
       this.componentInstances = previousInstances;
-      this.constraints = this.constraints.filter((candidate) => candidate.id !== constraint.id);
+      this.constraints = previousConstraints;
       this.rebuildAll('Restore Constraint State', { trackHistory: false });
       eventBus.emit('ui:status', {
-        message: 'Constraint blocked because the solved assembly could not rebuild.',
+        message: `Constraint blocked: ${rebuild.diagnostics[0]?.message ?? 'The selected mate could not be solved.'}`,
       });
       this.updateAssemblyPanel();
       return false;
     }
-
+    for (const candidate of this.constraints) {
+      eventBus.emit('constraint:solved', { constraintId: candidate.id, satisfied: candidate.satisfied });
+    }
     this.commitDocumentHistory('Add Constraint');
 
     log.info('Constraint created', { id: constraint.id, type: constraint.type });
@@ -7130,6 +7072,7 @@ export class App {
     options: { trackHistory?: boolean; refreshUi?: boolean } = {}
   ): { ok: boolean; diagnostics: Diagnostic[] } {
     this.interactionDiagnostics.rebuilds += 1;
+    this.assemblyConstraintStatuses = new Map();
     eventBus.emit('rebuild:start', { totalFeatures: this.features.length });
     for (const feature of this.features) synchronizeSketchFeatureRefsIn(feature);
     const result = this.rebuildEngine.rebuild(this.features);
@@ -7139,12 +7082,15 @@ export class App {
     let rebuildError = result.ok ? null : result.error;
 
     if (result.ok) {
-      const assemblyResult = rebuildWithComponents(result, this.components, this.componentInstances);
+      const assemblyResult = rebuildAssembly(result, this.components, this.componentInstances, this.constraints);
+      this.assemblyConstraintStatuses = assemblyResult.constraintStatuses;
       if (!assemblyResult.ok) {
         rebuildSucceeded = false;
         rebuildDiagnostics = assemblyResult.diagnostics;
         rebuildError = assemblyResult.error ?? 'Assembly reconstruction failed';
       } else {
+        this.componentInstances = assemblyResult.instances;
+        this.constraints = assemblyResult.constraints;
         this.applyFeatureOutputRefs(result.outputsByFeature);
         this.rebuiltBodiesByFeature = new Map(
           [...result.bodiesByFeature].map(([featureId, bodies]) => [featureId, [...bodies]])
@@ -7195,6 +7141,13 @@ export class App {
     }
 
     if (!rebuildSucceeded) {
+      for (const constraint of this.constraints) {
+        if (!constraint.suppressed && !this.assemblyConstraintStatuses.has(constraint.id)) {
+          this.assemblyConstraintStatuses.set(constraint.id, {
+            state: 'broken', message: rebuildError ?? 'The current model could not be rebuilt.',
+          });
+        }
+      }
       eventBus.emit('document:loaded', {
         features: this.features,
       });
@@ -7211,6 +7164,7 @@ export class App {
     eventBus.emit('feature:diagnostics', {
       diagnostics: rebuildDiagnostics,
     });
+    this.updateAssemblyPanel();
     if (rebuildSucceeded && options.trackHistory !== false) {
       this.commitDocumentHistory(historyLabel);
     }
@@ -7421,13 +7375,15 @@ export class App {
     this.refreshUiChrome();
   }
 
-  private loadFrameExample(): void {
-    this.loadDocument(createPortfolioFrameDocument(), { seedHistory: true, recordRecent: false });
-    this.welcomeOverlay.dismiss();
-    this.layout.expandSidebar('right');
-    this.panelChrome.expand('Frame example');
-    this.fitViewToModel(false);
-    eventBus.emit('ui:status', { message: 'Frame example loaded: four boards. Edit its length in Frame example controls.' });
+  private async loadFrameExample(): Promise<void> {
+    await this.documentLifecycle.replace('Loading the frame example', () => {
+      this.loadDocument(createPortfolioFrameDocument(), { seedHistory: true, recordRecent: false });
+      this.welcomeOverlay.dismiss();
+      this.layout.expandSidebar('right');
+      this.panelChrome.expand('Frame example');
+      this.fitViewToModel(false);
+      eventBus.emit('ui:status', { message: 'Frame example loaded: four boards. Edit its length in Frame example controls.' });
+    });
   }
 
   private applyPortfolioFrameLength(
@@ -7476,28 +7432,12 @@ export class App {
     // A download is a copy, not an attached writable file or proof of disk persistence.
   }
 
-  private async saveDocument(): Promise<void> {
-    const snapshot = this.buildDocumentSnapshot();
-    const result = await saveToFile(snapshot, `${snapshot.metadata.name}.json`);
-
-    if (result.ok) {
-      this.documentManager.setFilePath(result.path);
-      this.recentFilesStore.add(result.path, snapshot.metadata.name);
-      this.undoRedo.markClean();
-      this.autosaveManager.saveNow(snapshot, {
-        filePath: result.path,
-        reason: 'manual-save',
-      });
-      this.refreshDocumentDirtyState();
-      this.refreshUiChrome();
-      eventBus.emit('document:save', { path: result.path });
-      eventBus.emit('ui:status', { message: `Saved: ${result.path}` });
-    } else if (result.error !== 'Save cancelled') {
-      eventBus.emit('ui:status', { message: `Save failed: ${result.error}` });
-    }
+  private async saveDocument(): Promise<boolean> {
+    return this.documentLifecycle.save();
   }
 
   private async openDocument(portable = false): Promise<void> {
+    const epoch = this.documentLifecycle.documentEpoch;
     this.portableImportPending = portable;
     this.refreshUiChrome();
     const result = await loadFromFile({ portable });
@@ -7505,24 +7445,23 @@ export class App {
     this.refreshUiChrome();
 
     if (result.ok) {
-      this.loadDocument(result.document, {
-        path: result.path,
-        seedHistory: true,
-        recordRecent: true,
-      });
-      this.welcomeOverlay.dismiss();
-      this.fitViewToModel(false);
-      // Portable imports have no retained writable file handle. Keep a local
-      // snapshot immediately so Recent files can reopen them after a reload,
-      // even when the user has not made another edit to trigger autosave.
-      const recovery = portable ? this.autosaveManager.saveNow(this.buildDocumentSnapshot(), {
-        filePath: result.path,
-        reason: 'portable-import',
-      }) : null;
-      eventBus.emit('document:load', { path: result.path });
-      eventBus.emit('ui:status', { message: recovery && !recovery.ok
-        ? `Opened: ${result.path}; local recovery unavailable: ${recovery.error}`
-        : `Opened: ${result.path}` });
+      await this.documentLifecycle.replace('Opening another document', () => {
+        this.loadDocument(result.document, {
+          path: result.path,
+          seedHistory: true,
+          recordRecent: true,
+        });
+        this.welcomeOverlay.dismiss();
+        this.fitViewToModel(false);
+        const recovery = portable ? this.autosaveManager.saveNow(this.buildDocumentSnapshot(), {
+          filePath: result.path,
+          reason: 'portable-import',
+        }) : null;
+        eventBus.emit('document:load', { path: result.path });
+        eventBus.emit('ui:status', { message: recovery && !recovery.ok
+          ? `Opened: ${result.path}; local recovery unavailable: ${recovery.error}`
+          : `Opened: ${result.path}` });
+      }, epoch);
     } else if (result.error !== 'Open cancelled') {
       eventBus.emit('ui:status', { message: `Open failed: ${result.error}` });
     }
@@ -7544,7 +7483,11 @@ export class App {
     }
   }
 
-  private newDocument(): void {
+  private async newDocument(): Promise<void> {
+    await this.documentLifecycle.replace('Creating a new document', () => this.replaceWithNewDocument());
+  }
+
+  private replaceWithNewDocument(): void {
     this.cancelActiveInteraction();
     if (this.constraintCreationController?.isActive()) {
       this.constraintCreationController.cancel();
@@ -7602,6 +7545,8 @@ export class App {
       restoreSelection?: HistorySelectionSnapshot;
     } = {}
   ): void {
+    const structureError = validateDocumentStructure(doc);
+    if (structureError) throw new Error(`Invalid document: ${structureError}`);
     this.cancelActiveInteraction();
     if (this.constraintCreationController?.isActive()) {
       this.constraintCreationController.cancel();
@@ -7649,7 +7594,7 @@ export class App {
     }
 
     // Rebuild from features
-    if (this.features.length > 0) {
+    if (this.features.length > 0 || this.components.length > 0 || this.componentInstances.length > 0 || this.constraints.length > 0) {
       this.rebuildAll('Load Document', { trackHistory: false });
     } else {
       // Legacy: create meshes from bodies directly
@@ -9036,6 +8981,7 @@ export class App {
   }
 
   private resetAssemblyState(): void {
+    this.assemblyConstraintStatuses.clear();
     this.components = [];
     this.componentInstances = [];
     this.constraints = [];
@@ -9045,6 +8991,7 @@ export class App {
   }
 
   private loadAssemblyStateFromDocument(doc: Document): void {
+    this.assemblyConstraintStatuses.clear();
     this.instanceBodyIdsByInstance.clear();
     this.instanceBodySourceIds.clear();
     this.components = Array.isArray(doc.components)
@@ -9584,6 +9531,7 @@ export class App {
   }
 
   private seedDocumentHistory(label: string): void {
+    this.documentLifecycle.reset();
     const snapshot = this.buildHistorySnapshot();
     this.undoRedo.seed(snapshot, label);
     this.undoRedo.markClean();
@@ -9642,20 +9590,22 @@ export class App {
     eventBus.emit('ui:status', { message: `Redo: ${result.entry.label}` });
   }
 
-  private openRecentFile(entry: RecentFileEntry): void {
+  private async openRecentFile(entry: RecentFileEntry): Promise<void> {
     const restored = this.autosaveManager.restoreLatestByPath(entry.path);
     if (restored) {
-      this.loadDocument(restored.document, {
-        path: entry.path,
-        seedHistory: true,
-        recordRecent: true,
-      });
-      this.undoRedo.markDirty();
-      this.refreshDocumentDirtyState();
-      this.welcomeOverlay.dismiss();
-      this.fitViewToModel(false);
-      eventBus.emit('ui:status', {
-        message: `Reopened ${entry.name} from the latest autosaved snapshot`,
+      await this.documentLifecycle.replace('Opening a recent document', () => {
+        this.loadDocument(restored.document, {
+          path: entry.path,
+          seedHistory: true,
+          recordRecent: true,
+        });
+        this.undoRedo.markDirty();
+        this.refreshDocumentDirtyState();
+        this.welcomeOverlay.dismiss();
+        this.fitViewToModel(false);
+        eventBus.emit('ui:status', {
+          message: `Reopened ${entry.name} from the latest autosaved snapshot`,
+        });
       });
       return;
     }
@@ -9673,6 +9623,7 @@ export class App {
   }
 
   dispose(): void {
+    this.documentLifecycle.reset();
     window.removeEventListener('beforeunload', this.handleBeforeUnload);
     this.unsubscribeToolSessionEnd?.();
     this.unsubscribeToolSessionEnd = null;

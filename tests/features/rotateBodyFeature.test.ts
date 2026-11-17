@@ -4,6 +4,7 @@ import {
   rebuildBox,
   createRebuildContext,
   registerBodies,
+  createRebuildEngine,
 } from '../../src/features';
 import {
   ROTATE_BODY_FEATURE_TYPE,
@@ -12,8 +13,61 @@ import {
   validateRotateBodyParams,
   type RotateBodyParams,
 } from '../../src/features/transform';
+import { getBodyBoundingBox, hashBodyGeometry } from '../../src/geometry';
 
 describe('RotateBodyFeature', () => {
+  it('rotates the exact historical feature output rather than a later body with the same ID', () => {
+    const source = createBoxFeature({ width: 10, depth: 2, height: 1, origin: [0, 0, 0] });
+    const engine = createRebuildEngine();
+    engine.registerHandler('box', rebuildBox);
+    engine.registerHandler('rotateBody', rebuildRotateBody);
+    const initial = engine.rebuild([source]);
+    if (!initial.ok) throw new Error(initial.error);
+    const bodyId = initial.bodies[0]!.id;
+    const first = createRotateBodyFeature({ featureId: source.id, bodyId }, [0, 0, 90], 'worldOrigin');
+    const fromOriginal = createRotateBodyFeature({ featureId: source.id, bodyId }, [0, 0, 90], 'worldOrigin');
+    const fromRotation = createRotateBodyFeature({ featureId: first.id, bodyId }, [0, 0, 90], 'worldOrigin');
+    const originalHistory = engine.rebuild([source, first, fromOriginal]);
+    const cumulativeHistory = engine.rebuild([source, first, fromRotation]);
+    expect(originalHistory.ok).toBe(true);
+    expect(cumulativeHistory.ok).toBe(true);
+    if (!originalHistory.ok || !cumulativeHistory.ok) return;
+    expect(originalHistory.bodies).toHaveLength(1);
+    expect(hashBodyGeometry(originalHistory.bodies[0]!)).toBe(hashBodyGeometry(originalHistory.bodiesByFeature.get(first.id)![0]!));
+    const bounds = getBodyBoundingBox(cumulativeHistory.bodies[0]!);
+    expect(bounds.min[0]).toBeCloseTo(-10, 8);
+    expect(bounds.min[1]).toBeCloseTo(-2, 8);
+    expect(bounds.max[0]).toBeCloseTo(0, 8);
+    expect(bounds.max[1]).toBeCloseTo(0, 8);
+    expect(hashBodyGeometry(originalHistory.bodiesByFeature.get(source.id)![0]!)).toBe(hashBodyGeometry(initial.bodies[0]!));
+  });
+
+  it('fails closed for mismatched feature/body ownership even when the body exists in the current scene', () => {
+    const source = createBoxFeature({ width: 10, depth: 2, height: 1 });
+    const built = rebuildBox(source, createRebuildContext());
+    if (!built.ok) throw new Error(built.error);
+    const context = registerBodies(createRebuildContext(), source.id, built.bodies);
+    const feature = createRotateBodyFeature({ featureId: 'another-feature', bodyId: built.bodies[0]!.id }, [0, 0, 90]);
+    const result = rebuildRotateBody(feature, context);
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'BODY_NOT_FOUND' }));
+  });
+
+  it('continues to support saved rotations with an omitted legacy pivot', () => {
+    const source = createBoxFeature({ width: 10, depth: 2, height: 1, origin: [0, 0, 0] });
+    const built = rebuildBox(source, createRebuildContext());
+    if (!built.ok) throw new Error(built.error);
+    const context = registerBodies(createRebuildContext(), source.id, built.bodies);
+    const feature = createRotateBodyFeature({ featureId: source.id, bodyId: built.bodies[0]!.id }, [0, 0, 90]);
+    delete feature.parameters.pivot;
+    const result = rebuildRotateBody(feature, context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bounds = getBodyBoundingBox(result.bodies[0]!);
+    expect((bounds.min[0] + bounds.max[0]) / 2).toBeCloseTo(5, 8);
+    expect((bounds.min[1] + bounds.max[1]) / 2).toBeCloseTo(1, 8);
+  });
+
   it('validates missing body references', () => {
     const diagnostics = validateRotateBodyParams({ rotationDegrees: [0, 0, 15] } as Partial<RotateBodyParams>);
     expect(diagnostics.some((item) => item.code === 'MISSING_BODY_REF')).toBe(true);

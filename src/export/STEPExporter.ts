@@ -1,147 +1,88 @@
-/**
- * STEP Exporter - Exports geometry as ISO 10303 STEP (AP214) files.
- * Industry-standard format for CAD interoperability.
- */
+import type { Body } from '../geometry/Body';
+import { getOrderedLoopVertices } from '../geometry/Triangulator';
+import { buildExportMesh, MILLIMETERS_PER_INCH, requireBodies } from './ExportMesh';
 
-import type { Body } from '../geometry';
-
-/**
- * Export options for STEP.
- */
 export interface STEPExportOptions {
-  /** Optional document body name */
   name?: string;
-  /** Author name */
   author?: string;
-  /** Organization */
   organization?: string;
 }
 
-/**
- * Export bodies as STEP file.
- */
-export function exportToSTEP(bodies: Body[], options: STEPExportOptions): string {
-  const timestamp = new Date().toISOString();
-  const author = options.author || 'User';
-  const organization = options.organization || 'Parametric Modeler';
-  const name = options.name || 'Model';
-
-  // Collect all geometry entities
-  const allVertices: STEPVertex[] = [];
-  const allEdges: STEPEdge[] = [];
-  const allFaces: STEPFace[] = [];
-
-  for (const body of bodies) {
-    for (const [, face] of body.faces) {
-      const plane = body.planes.get(face.planeId);
-      if (!plane) continue;
-
-      // Get boundary edges and vertices
-      const edges: STEPEdge[] = [];
-      const vertices: STEPVertex[] = [];
-
-      for (const edgeId of face.boundaryEdgeIds) {
-        const edge = body.edges.get(edgeId);
-        if (!edge) continue;
-
-        const v0 = body.vertices.get(edge.vertexIds[0]);
-        const v1 = body.vertices.get(edge.vertexIds[1]);
-        if (!v0 || !v1) continue;
-
-        // Create vertices if not exists
-        const vertex0 = createVertex(v0.position);
-        const vertex1 = createVertex(v1.position);
-        vertices.push(vertex0, vertex1);
-        allVertices.push(vertex0, vertex1);
-
-        const edgeEntity = createEdge(vertex0, vertex1);
-        edges.push(edgeEntity);
-        allEdges.push(edgeEntity);
-      }
-
-      // Create face from edge loop
-      const faceEntity = createFace(edges);
-      allFaces.push(faceEntity);
-    }
-  }
-
-  // Build STEP content
-  const lines: string[] = [];
-
-  // Header section
-  lines.push('ISO-10303-21;');
-  lines.push('HEADER;');
-  lines.push('FILE_DESCRIPTION(("Manual"),"2;1");');
-  lines.push(`FILE_NAME("${name}","${timestamp}","${author}","${organization}","Parametric Modeler","Parametric Modeler","ISO-10303-21");`);
-  lines.push('FILE_SCHEMA(("AUTOMATED_DESIGN"));');
-  lines.push('ENDSEC;');
-
-  // Data section
-  lines.push('DATA;');
-
-  // Write vertices
-  let id = 1;
-  for (const vertex of allVertices) {
-    lines.push(`#${id} = CARTESIAN_POINT((),(${vertex.x.toFixed(6)}, ${vertex.y.toFixed(6)}, ${vertex.z.toFixed(6)}));`);
-    vertex.id = id;
-    id++;
-  }
-
-  // Write edges
-  for (const edge of allEdges) {
-    lines.push(`#${id} = EDGE_CURVE(${(edge.start.id || 0)}, ${(edge.end.id || 0)}, #1, .T.);`);
-    edge.id = id;
-    id++;
-  }
-
-  // Write faces
-  for (const face of allFaces) {
-    const edgeRefs = face.edges.map(e => `#${e.id || 0}`).join(', ');
-    lines.push(`#${id} = ADVANCED_FACE((),(${edgeRefs}), #1, .T.);`);
-    face.id = id;
-    id++;
-  }
-
-  // Write shell
-  const faceIds = allFaces.map(f => `#${f.id || 0}`).join(', ');
-  lines.push(`#${id} = CLOSED_SHELL((),(${faceIds}));`);
-
-  lines.push('ENDSEC;');
-  lines.push('END-ISO-10303-21;');
-
-  return lines.join('\n');
-}
-
-interface STEPVertex {
-  id?: number;
-  x: number;
-  y: number;
-  z: number;
-}
-
-interface STEPEdge {
-  id?: number;
-  start: STEPVertex;
-  end: STEPVertex;
-}
-
-interface STEPFace {
-  id?: number;
-  edges: STEPEdge[];
-}
-
-function createVertex(position: [number, number, number]): STEPVertex {
-  return {
-    x: position[0],
-    y: position[1],
-    z: position[2],
+/** AP203 planar faceted B-Rep. Original polygon boundaries and holes are retained. */
+export function exportToSTEP(bodies: readonly Body[], options: STEPExportOptions = {}): string {
+  requireBodies(bodies);
+  bodies.forEach(buildExportMesh);
+  const entities: string[] = [];
+  const add = (entity: string): string => {
+    entities.push(`#${entities.length + 1}=${entity};`);
+    return `#${entities.length}`;
   };
+  const application = add("APPLICATION_CONTEXT('configuration controlled 3d designs of mechanical parts and assemblies')");
+  add(`APPLICATION_PROTOCOL_DEFINITION('international standard','config_control_design',1994,${application})`);
+  const productContext = add(`PRODUCT_CONTEXT('',${application},'mechanical')`);
+  const product = add(`PRODUCT(${stepString(options.name ?? 'Model')},${stepString(options.name ?? 'Model')},'',(${productContext}))`);
+  const formation = add(`PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE('','',${product},.NOT_KNOWN.)`);
+  const definitionContext = add(`PRODUCT_DEFINITION_CONTEXT('part definition',${application},'design')`);
+  const definition = add(`PRODUCT_DEFINITION('design','',${formation},${definitionContext})`);
+  const productShape = add(`PRODUCT_DEFINITION_SHAPE('','',${definition})`);
+  const lengthUnit = add('(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.))');
+  const angleUnit = add('(NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.))');
+  const solidAngleUnit = add('(NAMED_UNIT(*) SI_UNIT($,.STERADIAN.) SOLID_ANGLE_UNIT())');
+  const uncertainty = add(`UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(0.0000254),${lengthUnit},'distance_accuracy_value','model tolerance')`);
+  const context = add(`(GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((${uncertainty})) GLOBAL_UNIT_ASSIGNED_CONTEXT((${lengthUnit},${angleUnit},${solidAngleUnit})) REPRESENTATION_CONTEXT('','3D'))`);
+  const solids: string[] = [];
+  for (const body of bodies) {
+    const vertices = new Map([...body.vertices].sort(([a], [b]) => a.localeCompare(b)).map(([id, vertex]) => [
+      id, add(`CARTESIAN_POINT('',(${vertex.position.map((value) => stepNumber(value * MILLIMETERS_PER_INCH)).join(',')}))`),
+    ]));
+    const faces: string[] = [];
+    for (const [, face] of [...body.faces].sort(([a], [b]) => a.localeCompare(b))) {
+      const plane = body.planes.get(face.planeId)!;
+      const normal = plane.normal;
+      const bounds = [face.boundaryEdgeIds, ...(face.innerBoundaryEdgeIds ?? [])].map((edges, loopIndex) => {
+        let loop = getOrderedLoopVertices(body, edges);
+        // Newell's normal is stable for concave polygons and collinear corners.
+        const sum = [0, 0, 0];
+        for (let i = 0; i < loop.length; i++) {
+          const a = loop[i]!.position;
+          const b = loop[(i + 1) % loop.length]!.position;
+          sum[0]! += (a[1] - b[1]) * (a[2] + b[2]);
+          sum[1]! += (a[2] - b[2]) * (a[0] + b[0]);
+          sum[2]! += (a[0] - b[0]) * (a[1] + b[1]);
+        }
+        const aligned = sum.reduce((value, component, i) => value + component * normal[i]!, 0) > 0;
+        if (aligned !== (loopIndex === 0)) loop = loop.reverse();
+        const polygon = add(`POLY_LOOP('',(${loop.map((vertex) => vertices.get(vertex.id)!).join(',')}))`);
+        return add(`${loopIndex === 0 ? 'FACE_OUTER_BOUND' : 'FACE_BOUND'}('',${polygon},.T.)`);
+      });
+      const origin = add(`CARTESIAN_POINT('',(${plane.origin.map((value) => stepNumber(value * MILLIMETERS_PER_INCH)).join(',')}))`);
+      const axis = add(`DIRECTION('',(${normal.map(stepNumber).join(',')}))`);
+      const reference = add(`DIRECTION('',(${plane.uAxis.map(stepNumber).join(',')}))`);
+      const placement = add(`AXIS2_PLACEMENT_3D('',${origin},${axis},${reference})`);
+      const surface = add(`PLANE('',${placement})`);
+      faces.push(add(`FACE_SURFACE('',(${bounds.join(',')}),${surface},.T.)`));
+    }
+    const shell = add(`CLOSED_SHELL('',(${faces.join(',')}))`);
+    solids.push(add(`FACETED_BREP(${stepString(body.name)},${shell})`));
+  }
+  const representation = add(`FACETED_BREP_SHAPE_REPRESENTATION('',(${solids.join(',')}),${context})`);
+  add(`SHAPE_DEFINITION_REPRESENTATION(${productShape},${representation})`);
+  return [
+    'ISO-10303-21;', 'HEADER;', "FILE_DESCRIPTION(('Planar woodworking solids; millimeters'),'2;1');",
+    `FILE_NAME(${stepString(options.name ?? 'Model')},${stepString(new Date().toISOString())},(${stepString(options.author ?? '')}),(${stepString(options.organization ?? '')}),'Parametric Modeler','Parametric Modeler','');`,
+    "FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));", 'ENDSEC;', 'DATA;', ...entities, 'ENDSEC;', 'END-ISO-10303-21;',
+  ].join('\n');
 }
 
-function createEdge(start: STEPVertex, end: STEPVertex): STEPEdge {
-  return { start, end };
+function stepNumber(value: number): string {
+  const text = value.toString().toUpperCase();
+  return text.includes('.') || text.includes('E') ? text : `${text}.`;
 }
 
-function createFace(edges: STEPEdge[]): STEPFace {
-  return { edges };
+function stepString(value: string): string {
+  return `'${value.replace(/['\\]|[^\x20-\x7E]/g, (character) => {
+    if (character === "'") return "''";
+    if (character === '\\') return '\\\\';
+    return `\\X2\\${character.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}\\X0\\`;
+  })}'`;
 }

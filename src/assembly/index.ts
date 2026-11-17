@@ -47,6 +47,8 @@ export {
   createComponentAwareRebuild,
 } from './ComponentRebuilder';
 
+export { rebuildAssembly, type AssemblyRebuildResult } from './AssemblyRebuilder';
+
 // Constraints
 export {
   MATE_CONSTRAINT_TYPE,

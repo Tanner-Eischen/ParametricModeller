@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { App } from '../../src/App';
 import { WoodworkingController } from '../../src/app/WoodworkingController';
 import {
@@ -44,11 +44,19 @@ function reopenedFrame() {
     getFeatureByBodyId: bodyId => app.getFeatureByBodyId(bodyId),
     getFeatureById: featureId => app.getFeatureById(featureId),
     getInstanceForBody: bodyId => app.getInstanceForBody(bodyId),
-    instanceBodySourceIds: rebuilt.instanceBodySourceIds,
-    rebuiltBodies: rebuilt.bodies,
-    setBodyMetadata: vi.fn(),
-    refreshUiChrome: vi.fn(),
+    getInstanceSourceId: bodyId => rebuilt.instanceBodySourceIds.get(bodyId),
+    getInstanceSourceFeatureId: bodyId => {
+      const instance = app.getInstanceForBody(bodyId);
+      const component = doc.components.find(candidate => candidate.id === instance?.componentId);
+      const sourceId = rebuilt.instanceBodySourceIds.get(bodyId);
+      return component ? [...component.featureIds].reverse().find(id =>
+        featureRebuild.bodiesByFeature.get(id)?.some(body => body.id === sourceId)
+      ) : undefined;
+    },
+    getBodiesByFeature: () => featureRebuild.bodiesByFeature,
+    getRebuiltBodies: () => rebuilt.bodies,
   });
+  app.woodworkingController = controller;
   return { doc, rebuilt, app, controller };
 }
 

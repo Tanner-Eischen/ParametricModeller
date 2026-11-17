@@ -261,12 +261,19 @@ export function rebuildWithComponents(
     componentById.set(component.id, component);
     componentBodies.set(component.id, []);
 
-    // Process the component's persisted feature order and let a later selected
-    // feature replace an earlier snapshot with the same stable body ID. This
-    // preserves history semantics without ever consulting final scene geometry.
+    // Replay the selected features in actual rebuild/history order. A selected
+    // operation consumes its inputs before emitting replacements, including
+    // inputs whose IDs do not survive in the output (for example compound B).
+    // Operations outside this selection do not consume an explicitly selected
+    // historical snapshot. The persisted component list need not be sorted.
     const exactBodyById = new Map<string, BRepBody>();
-    for (const featureId of component.featureIds) {
-      for (const body of baseResult.bodiesByFeature.get(featureId) ?? []) {
+    const selectedFeatures = new Set(component.featureIds);
+    for (const [featureId, bodies] of baseResult.bodiesByFeature) {
+      if (!selectedFeatures.has(featureId)) continue;
+      for (const bodyId of baseResult.replacedBodyIdsByFeature?.get(featureId) ?? []) {
+        exactBodyById.delete(bodyId);
+      }
+      for (const body of bodies) {
         exactBodyById.set(body.id, body);
       }
     }

@@ -64,6 +64,8 @@ export type RebuildResult =
       bodiesByFeature: Map<string, Body[]>;
       /** Latest feature that emitted each stable body ID. */
       featureByBodyId: Map<string, string>;
+      /** Bodies consumed by each successful feature, for historical component reconstruction. */
+      replacedBodyIdsByFeature?: ReadonlyMap<string, readonly string[]>;
     }
   | {
       ok: false;
@@ -75,6 +77,8 @@ export type RebuildResult =
       bodiesByFeature: Map<string, Body[]>;
       /** Latest successful feature that emitted each stable body ID. */
       featureByBodyId: Map<string, string>;
+      /** Bodies consumed by each successful feature, for historical component reconstruction. */
+      replacedBodyIdsByFeature?: ReadonlyMap<string, readonly string[]>;
     };
 
 /**
@@ -94,6 +98,7 @@ export function createRebuildEngine(): RebuildEngine {
 
       const bodiesByFeature = new Map<string, Body[]>();
       const featureByBodyId = new Map<string, string>();
+      const replacedBodyIdsByFeature = new Map<string, readonly string[]>();
       const dependencyGraph = createDependencyGraph(features);
       if (dependencyGraph.diagnostics.length > 0) {
         const firstDiagnostic = dependencyGraph.diagnostics[0]!;
@@ -109,6 +114,7 @@ export function createRebuildEngine(): RebuildEngine {
           outputsByFeature: new Map(),
           bodiesByFeature,
           featureByBodyId,
+          replacedBodyIdsByFeature,
         };
       }
 
@@ -139,6 +145,7 @@ export function createRebuildEngine(): RebuildEngine {
             outputsByFeature: collectOutputIds(context.outputsByFeature),
             bodiesByFeature,
             featureByBodyId,
+            replacedBodyIdsByFeature,
           };
         }
 
@@ -160,11 +167,13 @@ export function createRebuildEngine(): RebuildEngine {
               outputsByFeature: collectOutputIds(context.outputsByFeature),
               bodiesByFeature,
               featureByBodyId,
+              replacedBodyIdsByFeature,
             };
           }
 
           const bodySnapshots = result.bodies.map(cloneBodySnapshot);
           bodiesByFeature.set(feature.id, bodySnapshots);
+          replacedBodyIdsByFeature.set(feature.id, [...(result.replacedBodyIds ?? [])]);
           for (const body of bodySnapshots) {
             featureByBodyId.set(body.id, feature.id);
           }
@@ -191,6 +200,7 @@ export function createRebuildEngine(): RebuildEngine {
             outputsByFeature: collectOutputIds(context.outputsByFeature),
             bodiesByFeature,
             featureByBodyId,
+            replacedBodyIdsByFeature,
           };
         }
       }
@@ -205,6 +215,7 @@ export function createRebuildEngine(): RebuildEngine {
         outputsByFeature: collectOutputIds(context.outputsByFeature),
         bodiesByFeature,
         featureByBodyId,
+        replacedBodyIdsByFeature,
       };
     },
   };

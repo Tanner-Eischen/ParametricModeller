@@ -54,6 +54,9 @@ export type AppCommandId =
   | 'measureSelection'
   | 'exportCutList'
   | 'exportDrawing'
+  | 'exportSTL'
+  | 'exportSTEP'
+  | 'exportMF3'
   | 'openCommandPalette'
   | 'toggleHelp';
  
@@ -503,6 +506,27 @@ export const COMMAND_DEFINITIONS: AppCommandDefinition[] = [
     icon: '2D',
     label: 'Drawing',
     description: 'Export exact top, front, and right orthographic SVG views',
+    toolbarGroup: 'Output',
+  },
+  {
+    id: 'exportSTL',
+    icon: 'STL',
+    label: 'STL',
+    description: 'Export visible solids as triangulated STL in millimeters',
+    toolbarGroup: 'Output',
+  },
+  {
+    id: 'exportSTEP',
+    icon: 'STEP',
+    label: 'STEP',
+    description: 'Export visible planar solids as STEP in millimeters',
+    toolbarGroup: 'Output',
+  },
+  {
+    id: 'exportMF3',
+    icon: '3MF',
+    label: '3MF',
+    description: 'Export visible solids as a 3MF package in millimeters',
     toolbarGroup: 'Output',
   },
   {

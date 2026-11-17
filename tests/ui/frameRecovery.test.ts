@@ -5,7 +5,8 @@ import { AutosaveManager } from '../../src/persistence/AutosaveManager';
 import { loadFromFile } from '../../src/persistence/serializer';
 import { createPortfolioFrameDocument } from '../../src/examples/portfolioFrame';
 import { inspectPortfolioFrame } from '../../src/app/PortfolioFrameWorkflow';
-import type { Document } from '../../src/types';
+import { DocumentLifecycle } from '../../src/app/DocumentLifecycle';
+import { createDefaultDocument, type Document } from '../../src/types';
 
 vi.mock('../../src/persistence/serializer', async importOriginal => ({
   ...await importOriginal<typeof import('../../src/persistence/serializer')>(),
@@ -13,6 +14,21 @@ vi.mock('../../src/persistence/serializer', async importOriginal => ({
 }));
 
 afterEach(() => vi.clearAllMocks());
+
+function installCleanLifecycle(harness: any): void {
+  harness.documentLifecycle = new DocumentLifecycle({
+    capture: () => ({
+      document: harness.buildDocumentSnapshot?.() ?? createDefaultDocument('Startup'),
+      revision: null,
+    }),
+    isDirty: () => false,
+    write: vi.fn().mockResolvedValue({ ok: false, error: 'Save cancelled' }),
+    onSaved: vi.fn(),
+    preserveRecovery: (document) => harness.autosaveManager.saveNow(document),
+    chooseDisposition: vi.fn().mockResolvedValue('cancel'),
+    status: vi.fn(),
+  });
+}
 
 describe('portable frame recovery through App', () => {
   it('can recover an imported frame immediately after startup without another edit', async () => {
@@ -33,20 +49,24 @@ describe('portable frame recovery through App', () => {
     const harness = Object.assign(Object.create(App.prototype), {
       autosaveManager: autosave,
       refreshUiChrome: vi.fn(),
-      loadDocument: (doc: Document) => { current = structuredClone(doc); },
+      loadDocument: (doc: Document) => {
+        current = structuredClone(doc);
+        harness.documentLifecycle.reset();
+      },
       buildDocumentSnapshot: () => structuredClone(current!),
       welcomeOverlay: { dismiss },
       fitViewToModel: fit,
       undoRedo: { markDirty: vi.fn() },
       refreshDocumentDirtyState: vi.fn(),
     });
+    installCleanLifecycle(harness);
     await harness.openDocument(true);
     expect(loadFromFile).toHaveBeenCalledWith({ portable: true });
     autosave.dispose();
     // A new manager models a fresh application instance reading persisted bytes.
     harness.autosaveManager = new AutosaveManager({ storage });
     current = null; dismiss.mockClear(); fit.mockClear();
-    harness.openRecentFile({ path: 'frame-copy.json', name: 'Frame copy', lastOpened: '2026-11-06T00:00:00.000Z' });
+    await harness.openRecentFile({ path: 'frame-copy.json', name: 'Frame copy', lastOpened: '2026-11-06T00:00:00.000Z' });
     expect(inspectPortfolioFrame(current!)?.bounds).toEqual([26, 20, 0.75]);
     expect(current!.features).toEqual(imported.features);
     expect(current!.componentInstances).toEqual(imported.componentInstances);
@@ -62,6 +82,7 @@ describe('portable frame recovery through App', () => {
     const harness = Object.assign(Object.create(App.prototype), {
       refreshUiChrome: vi.fn(), loadDocument, autosaveManager: { saveNow },
     });
+    installCleanLifecycle(harness);
     await harness.openDocument(true);
     expect(loadDocument).not.toHaveBeenCalled();
     expect(saveNow).not.toHaveBeenCalled();

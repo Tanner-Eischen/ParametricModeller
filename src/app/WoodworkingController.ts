@@ -1,56 +1,56 @@
-/**
- * Woodworking controller - handles woodworking metadata inheritance.
- * Extracted from App.ts for modularity.
- *
- * Pattern: injected deps (getters for reads, setters/actions for writes),
- * self-contained behavior, no App state ownership.
- */
-
 import * as THREE from 'three';
 import type { BodyWoodworkingMetadata, Document } from '../types';
-import type { FeatureRecord } from '../features';
-import type { ComponentInstance } from '../assembly';
-import type { Body as BRepBody } from '../geometry';
+import type { FeatureRecord } from '../features/FeatureRecord';
+import type { ComponentInstance } from '../assembly/AssemblyTypes';
+import type { Body as BRepBody } from '../geometry/Body';
+import { getConstructionPlaneFromRef } from '../geometry/ConstructionPlane';
+import type { PlaneRef } from '../sketch/SketchTypes';
+import { createRebuildContext } from '../features/RebuildContext';
+import { solvePlacementMatrix, type Placement } from '../features/placement/PlacementSolver';
+import {
+  getCircularPatternInstanceTransforms,
+  type CircularPatternParams,
+} from '../features/pattern/CircularPatternFeature';
 
 export interface WoodworkingControllerDeps {
-  // Reads
   getDocument: () => Document;
   getFeatureByBodyId: (bodyId: string) => FeatureRecord | null;
   getFeatureById: (featureId: string) => FeatureRecord | null;
   getInstanceForBody: (bodyId: string) => ComponentInstance | null;
-  instanceBodySourceIds: Map<string, string>;
-  rebuiltBodies: BRepBody[];
-
-  // Writes / actions
-  setBodyMetadata: (bodyId: string, metadata: BodyWoodworkingMetadata) => void;
-  refreshUiChrome: () => void;
+  getInstanceSourceId: (bodyId: string) => string | undefined;
+  /** Exact component revision, when its source precedes the final body owner. */
+  getInstanceSourceFeatureId?: (bodyId: string) => string | undefined;
+  getBodiesByFeature: () => ReadonlyMap<string, BRepBody[]>;
+  getRebuiltBodies: () => BRepBody[];
 }
 
-/** Deep-clone metadata to avoid mutation of shared objects. */
-function cloneMetadata<T>(obj: T): T {
-  return JSON.parse(JSON.stringify(obj)) as T;
+interface SourceRef { featureId?: string; bodyId?: string }
+
+interface InheritanceParameters {
+  sourceBodyRef?: SourceRef;
+  bodyRef?: SourceRef;
+  targetBodyRef?: SourceRef;
+  bodyRefs?: SourceRef[];
+  members?: Array<{ bodyRef?: SourceRef }>;
+  sourceFeatureId?: string;
+  rotationDegrees?: [number, number, number];
+  planeRef?: PlaneRef;
+  placement?: Placement;
 }
 
+/** Resolve manufacturing identity and orientation from exact feature history. */
 export class WoodworkingController {
-  private readonly d: WoodworkingControllerDeps;
+  constructor(private readonly d: WoodworkingControllerDeps) {}
 
-  constructor(deps: WoodworkingControllerDeps) {
-    this.d = deps;
-  }
-
-  /** Get current unit preference from document config. */
   getUnit(): 'in' | 'mm' {
     return this.d.getDocument().config.units === 'mm' ? 'mm' : 'in';
   }
 
-  /** Format inch-based model value in active document unit. */
   formatLengthInput(valueInches: number): string {
-    const unit = this.getUnit();
-    const displayed = unit === 'mm' ? valueInches * 25.4 : valueInches;
+    const displayed = this.getUnit() === 'mm' ? valueInches * 25.4 : valueInches;
     return String(Number(displayed.toFixed(6)));
   }
 
-  /** Resolve woodworking metadata with inheritance through instance hierarchies. */
   resolveWoodworkingMetadata(
     bodyId: string,
     featureId = this.d.getFeatureByBodyId(bodyId)?.id,
@@ -59,93 +59,99 @@ export class WoodworkingController {
     const visitKey = `${featureId ?? 'instance'}:${bodyId}`;
     if (visited.has(visitKey)) return null;
     visited.add(visitKey);
-
     const direct = this.d.getDocument().bodyMetadata?.[bodyId];
     const instance = this.d.getInstanceForBody(bodyId);
-    const instanceSourceId = instance ? this.d.instanceBodySourceIds.get(bodyId) : undefined;
-    const instanceSourceOwner = instanceSourceId ? this.d.getFeatureByBodyId(instanceSourceId)?.id : undefined;
+    const instanceSourceId = instance ? this.d.getInstanceSourceId(bodyId) : undefined;
+    const instanceSourceOwner = instanceSourceId
+      ? this.d.getInstanceSourceFeatureId?.(bodyId) ?? this.d.getFeatureByBodyId(instanceSourceId)?.id
+      : undefined;
     if (direct && (!direct.sourceFeatureId || direct.sourceFeatureId === featureId
       || (instanceSourceOwner !== undefined && direct.sourceFeatureId === instanceSourceOwner))) {
       // Per-instance authoring stores world axes, not source-local axes.
-      return cloneMetadata(direct);
+      return structuredClone(direct);
     }
 
     if (instance) {
-      const sourceId = this.d.instanceBodySourceIds.get(bodyId);
-      if (sourceId) {
-        const inherited = this.resolveWoodworkingMetadata(sourceId, this.d.getFeatureByBodyId(sourceId)?.id, visited);
-        return inherited ? this.transformAxes(inherited, new THREE.Matrix4().fromArray(instance.transform)) : null;
-      }
+      if (!instanceSourceId) return null;
+      const inherited = this.resolveWoodworkingMetadata(instanceSourceId, instanceSourceOwner, visited);
+      return inherited ? transformAxes(inherited, new THREE.Matrix4().fromArray(instance.transform)) : null;
     }
 
     const feature = featureId ? this.d.getFeatureById(featureId) : this.d.getFeatureByBodyId(bodyId);
-    if (!feature) return direct ? cloneMetadata(direct) : null;
-
-    const parameters = feature.parameters as Record<string, unknown>;
-    const candidateRefs = this.collectSourceRefs(parameters);
-
-    // Find direct reference to this body
+    if (!feature) return null;
+    const parameters = feature.parameters as InheritanceParameters;
+    const candidateRefs = [
+      parameters.sourceBodyRef,
+      parameters.bodyRef,
+      ...(parameters.members?.map((member) => member.bodyRef) ?? []),
+      ...(parameters.bodyRefs ?? []),
+    ].filter((reference): reference is SourceRef => reference !== undefined);
     let sourceRef = candidateRefs.find((reference) => reference.bodyId === bodyId);
-
-    // Boolean/join features inherit from target member
-    if (!sourceRef && (feature.type === 'bodyBoolean' || feature.type === 'woodJoint' || feature.type === 'joinBodies')) {
-      sourceRef = (parameters as { targetBodyRef?: { bodyId?: string } }).targetBodyRef ?? candidateRefs[0];
+    if (!sourceRef && feature.type === 'transformBodies') {
+      const outputIndex = this.getOutputIndex(feature, bodyId);
+      sourceRef = outputIndex >= 0 ? parameters.bodyRefs?.[outputIndex] : undefined;
     }
-
-    // Fallback to source/target refs for features that produce new body IDs
-    sourceRef ??= (parameters as { sourceBodyRef?: { bodyId?: string } }).sourceBodyRef;
-    sourceRef ??= (parameters as { targetBodyRef?: { bodyId?: string } }).targetBodyRef;
-
-    const sourceFeatureId = sourceRef?.featureId ?? (parameters as { sourceFeatureId?: string }).sourceFeatureId;
-    const sourceBodyId = sourceRef?.bodyId ?? (
-      sourceFeatureId
-        ? this.d.getFeatureById(sourceFeatureId)?.refsOut.find((id) => this.d.rebuiltBodies.some((b) => b.id === id))
-        : undefined
-    );
-
-    if (!sourceBodyId) return direct ? cloneMetadata(direct) : null;
+    if (!sourceRef && ['bodyBoolean', 'woodJoint', 'joinBodies'].includes(feature.type)) {
+      sourceRef = parameters.targetBodyRef ?? candidateRefs[0];
+    }
+    sourceRef ??= parameters.sourceBodyRef;
+    sourceRef ??= parameters.targetBodyRef;
+    const sourceFeatureId = sourceRef?.featureId ?? parameters.sourceFeatureId;
+    // Legacy single-source patterns rebuild the first body of that exact
+    // source feature, even if a later feature has replaced it in the scene.
+    const sourceBodyId = sourceRef?.bodyId ?? (sourceFeatureId
+      ? this.d.getBodiesByFeature().get(sourceFeatureId)?.[0]?.id
+      : undefined);
+    if (!sourceBodyId) return null;
     const inherited = this.resolveWoodworkingMetadata(sourceBodyId, sourceFeatureId, visited);
     if (!inherited) return null;
 
-    // Apply transform based on feature type
-    if (feature.type === 'rotateBody') {
-      const rotationDegrees = (parameters as { rotationDegrees?: [number, number, number] }).rotationDegrees;
-      if (rotationDegrees) {
-        const [x, y, z] = rotationDegrees.map((d) => THREE.MathUtils.degToRad(d)) as [number, number, number];
-        return this.transformAxes(inherited, new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(x, y, z, 'XYZ')));
-      }
+    if (feature.type === 'rotateBody' && parameters.rotationDegrees) {
+      const [x, y, z] = parameters.rotationDegrees.map(THREE.MathUtils.degToRad) as [number, number, number];
+      return transformAxes(inherited, new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(x, y, z, 'XYZ')));
     }
-
-    // Note: mirror feature axis transformation requires full PlaneRef structure
-    // and is handled in App.ts where the rebuild context has access to face geometry
+    if (feature.type === 'transformBodies' && parameters.placement) {
+      const context = createRebuildContext();
+      context.bodiesByFeature = new Map(this.d.getBodiesByFeature());
+      context.allBodies = this.d.getRebuiltBodies();
+      const solved = solvePlacementMatrix(parameters.placement, context, feature.id);
+      return solved.ok ? transformAxes(inherited, solved.matrix) : null;
+    }
+    if (feature.type === 'circularPattern') {
+      const occurrence = getCircularPatternInstanceTransforms(
+        feature.parameters as unknown as CircularPatternParams
+      )[this.getOutputIndex(feature, bodyId)];
+      return occurrence ? transformAxes(inherited, occurrence.transform) : null;
+    }
+    if (feature.type === 'mirror' && parameters.planeRef) {
+      const plane = getConstructionPlaneFromRef(
+        parameters.planeRef,
+        this.d.getRebuiltBodies(),
+        this.d.getBodiesByFeature()
+      );
+      if (!plane) return null;
+      const normal = new THREE.Vector3(...plane.normal).normalize();
+      const reflect = (axis: readonly [number, number, number]): [number, number, number] => {
+        const vector = new THREE.Vector3(...axis);
+        return vector.addScaledVector(normal, -2 * vector.dot(normal)).normalize().toArray();
+      };
+      return { ...inherited, grainAxis: reflect(inherited.grainAxis), thicknessAxis: reflect(inherited.thicknessAxis) };
+    }
     return inherited;
   }
 
-  private collectSourceRefs(
-    parameters: Record<string, unknown>
-  ): Array<{ featureId?: string; bodyId?: string }> {
-    const refs = [
-      (parameters as { sourceBodyRef?: { bodyId?: string } }).sourceBodyRef,
-      (parameters as { bodyRef?: { bodyId?: string } }).bodyRef,
-    ];
-    const members = (parameters as { members?: Array<{ bodyRef?: { bodyId?: string } }> }).members ?? [];
-    const memberRefs = members.map((m) => m.bodyRef).filter((r): r is { bodyId?: string } => r !== undefined);
-    const bodyRefs = (parameters as { bodyRefs?: Array<{ bodyId?: string }> }).bodyRefs ?? [];
-    return [...refs, ...memberRefs, ...bodyRefs].filter((r): r is { bodyId?: string } => r !== undefined);
+  private getOutputIndex(feature: FeatureRecord, bodyId: string): number {
+    const bodies = this.d.getBodiesByFeature().get(feature.id);
+    return bodies ? bodies.findIndex((body) => body.id === bodyId) : feature.refsOut.indexOf(bodyId);
   }
+}
 
-  private transformAxes(
-    metadata: BodyWoodworkingMetadata,
-    matrix: THREE.Matrix4
-  ): BodyWoodworkingMetadata {
-    const transform = (axis: readonly [number, number, number]): [number, number, number] => {
-      const direction = new THREE.Vector3(...axis).transformDirection(matrix).normalize();
-      return [direction.x, direction.y, direction.z];
-    };
-    return {
-      ...metadata,
-      grainAxis: transform(metadata.grainAxis),
-      thicknessAxis: transform(metadata.thicknessAxis),
-    };
-  }
+function transformAxes(metadata: BodyWoodworkingMetadata, matrix: THREE.Matrix4): BodyWoodworkingMetadata {
+  const transform = (axis: readonly [number, number, number]): [number, number, number] =>
+    new THREE.Vector3(...axis).transformDirection(matrix).toArray();
+  return {
+    ...metadata,
+    grainAxis: transform(metadata.grainAxis),
+    thicknessAxis: transform(metadata.thicknessAxis),
+  };
 }

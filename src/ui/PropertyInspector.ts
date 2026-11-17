@@ -11,6 +11,7 @@ import type {
   ExtrudeParams,
   ExtrudeCutParams,
   LinearPatternParams,
+  CircularPatternParams,
   MirrorParams,
   DuplicateParams,
   MoveCopyParams,
@@ -343,6 +344,9 @@ export class PropertyInspector {
 
     if (this.currentFeature.type === 'linearPattern') {
       return this.renderLinearPatternParameters(container);
+    }
+    if (this.currentFeature.type === 'circularPattern') {
+      return this.renderCircularPatternParameters(container);
     }
 
     if (this.currentFeature.type === 'mirror') {
@@ -949,9 +953,25 @@ export class PropertyInspector {
     return container;
   }
 
-  /**
-   * Render mirror-specific parameters.
-   */
+  private renderCircularPatternParameters(container: HTMLElement): HTMLElement {
+    if (!this.currentFeature) return container;
+    const params = this.currentFeature.parameters as unknown as CircularPatternParams;
+    container.appendChild(this.createReadOnlyDetail('Source body', params.sourceBodyRef?.bodyId ?? params.sourceFeatureId));
+    container.appendChild(this.createNumberInput('Occurrences', params.count, (value) => this.updateParameter('count', value)));
+    container.appendChild(this.createNumberInput('Total angle (degrees)', params.angle, (value) => this.updateParameter('angle', value)));
+    container.appendChild(this.createSelectInput('Rotation axis', ['X', 'Y', 'Z'], params.axis, (value) => this.updateParameter('axis', value)));
+    params.center.forEach((coordinate, index) => {
+      container.appendChild(this.createNumberInput(`Center ${['X', 'Y', 'Z'][index]}`, coordinate, (value) => {
+        const center = [...((this.currentFeature?.parameters.center ?? params.center) as number[])];
+        center[index] = value;
+        this.updateParameter('center', center);
+      }, { useDocumentUnits: true }));
+    });
+    container.appendChild(this.createCheckboxInput('Symmetric', params.symmetric, (value) => this.updateParameter('symmetric', value)));
+    return container;
+  }
+
+  /** Render mirror-specific parameters. */
   private renderMirrorParameters(container: HTMLElement): HTMLElement {
     if (!this.currentFeature) return container;
 

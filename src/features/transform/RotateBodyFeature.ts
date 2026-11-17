@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { createFeatureRecord, type FeatureRecord } from '../FeatureRecord';
 import { error, type Diagnostic } from '../Diagnostics';
-import { getAllBodies, type RebuildContext } from '../RebuildContext';
+import type { RebuildContext } from '../RebuildContext';
 import type { RebuildHandlerResult } from '../RebuildEngine';
 import { getBodyBoundingBox, transformVertexPositions, validateBody } from '../../geometry';
 import type { BodyRef } from '../../geometry/SubObjectTypes';
@@ -88,12 +88,13 @@ export function rebuildRotateBody(
     };
   }
 
-  const targetBody = getAllBodies(context).find((body) => body.id === params.bodyRef.bodyId);
+  const targetBody = context.bodiesByFeature.get(params.bodyRef.featureId)
+    ?.find((body) => body.id === params.bodyRef.bodyId);
   if (!targetBody) {
     return {
       ok: false,
-      error: `Body ${params.bodyRef.bodyId} not found`,
-      diagnostics: [error('BODY_NOT_FOUND', `Body ${params.bodyRef.bodyId} not found`)],
+      error: `Body ${params.bodyRef.bodyId} was not emitted by feature ${params.bodyRef.featureId}`,
+      diagnostics: [error('BODY_NOT_FOUND', `Body ${params.bodyRef.bodyId} was not emitted by feature ${params.bodyRef.featureId}`)],
     };
   }
 
